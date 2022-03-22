@@ -21,11 +21,11 @@ import (
 	"strings"
 
 	"cuelang.org/go/cue"
-	"cuelang.org/go/cue/ast"
 	"cuelang.org/go/cue/build"
 	"cuelang.org/go/cue/format"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/klog/v2"
 
 	"github.com/oam-dev/kubevela/pkg/cue/model/sets"
 )
@@ -35,7 +35,7 @@ type Instance interface {
 	String() string
 	Unstructured() (*unstructured.Unstructured, error)
 	IsBase() bool
-	Unify(other Instance) error
+	Unify(other Instance, options ...sets.UnifyOption) error
 	Compile() ([]byte, error)
 }
 
@@ -67,7 +67,7 @@ func (inst *instance) Compile() ([]byte, error) {
 	}
 	// compiled object should be final and concrete value
 	if err := it.Value().Validate(cue.Concrete(true), cue.Final()); err != nil {
-		return nil, it.Err
+		return nil, err
 	}
 	return it.Value().MarshalJSON()
 }
@@ -77,19 +77,19 @@ func (inst *instance) Compile() ([]byte, error) {
 func (inst *instance) Unstructured() (*unstructured.Unstructured, error) {
 	jsonv, err := inst.Compile()
 	if err != nil {
-		return nil, err
+		klog.ErrorS(err, "failed to have the workload/trait unstructured", "Definition", inst.String())
+		return nil, errors.Wrap(err, "failed to have the workload/trait unstructured")
 	}
 	o := &unstructured.Unstructured{}
 	if err := o.UnmarshalJSON(jsonv); err != nil {
 		return nil, err
 	}
 	return o, nil
-
 }
 
 // Unify implement unity operations between instances
-func (inst *instance) Unify(other Instance) error {
-	pv, err := sets.StrategyUnify(inst.v, other.String())
+func (inst *instance) Unify(other Instance, options ...sets.UnifyOption) error {
+	pv, err := sets.StrategyUnify(inst.v, other.String(), options...)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func openPrint(v cue.Value) (string, error) {
 		return "", err
 	}
 	for _, decl := range f.Decls {
-		listOpen(decl)
+		sets.ListOpen(decl)
 	}
 
 	ret, err := format.Node(f)
@@ -154,31 +154,4 @@ func IndexMatchLine(ret, target string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func listOpen(expr ast.Node) {
-	switch v := expr.(type) {
-	case *ast.Field:
-		listOpen(v.Value)
-	case *ast.StructLit:
-		for _, elt := range v.Elts {
-			listOpen(elt)
-		}
-	case *ast.BinaryExpr:
-		listOpen(v.X)
-		listOpen(v.Y)
-	case *ast.EmbedDecl:
-		listOpen(v.Expr)
-	case *ast.Comprehension:
-		listOpen(v.Value)
-	case *ast.ListLit:
-		for _, elt := range v.Elts {
-			listOpen(elt)
-		}
-		if len(v.Elts) > 0 {
-			if _, ok := v.Elts[len(v.Elts)-1].(*ast.Ellipsis); !ok {
-				v.Elts = append(v.Elts, &ast.Ellipsis{})
-			}
-		}
-	}
 }

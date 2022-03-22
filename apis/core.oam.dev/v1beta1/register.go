@@ -35,6 +35,9 @@ var (
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme
 	SchemeBuilder = &scheme.Builder{GroupVersion: SchemeGroupVersion}
+
+	// AddToScheme is a global function that registers this API group & version to a scheme
+	AddToScheme = SchemeBuilder.AddToScheme
 )
 
 // ComponentDefinition type metadata.
@@ -93,14 +96,6 @@ var (
 	ApplicationKindVersionKind = SchemeGroupVersion.WithKind(ApplicationKind)
 )
 
-// AppRollout type metadata.
-var (
-	AppRolloutKind            = reflect.TypeOf(AppRollout{}).Name()
-	AppRolloutGroupKind       = schema.GroupKind{Group: Group, Kind: AppRolloutKind}.String()
-	AppRolloutKindAPIVersion  = ApplicationKind + "." + SchemeGroupVersion.String()
-	AppRolloutKindVersionKind = SchemeGroupVersion.WithKind(AppRolloutKind)
-)
-
 // ApplicationRevision type metadata
 var (
 	ApplicationRevisionKind             = reflect.TypeOf(ApplicationRevision{}).Name()
@@ -125,30 +120,6 @@ var (
 	ResourceTrackerKindVersionKind = SchemeGroupVersion.WithKind(ResourceTrackerKind)
 )
 
-// AppDeployment type metadata.
-var (
-	AppDeploymentKind            = reflect.TypeOf(AppDeployment{}).Name()
-	AppDeploymentGroupKind       = schema.GroupKind{Group: Group, Kind: AppDeploymentKind}.String()
-	AppDeploymentKindAPIVersion  = AppDeploymentKind + "." + SchemeGroupVersion.String()
-	AppDeploymentKindVersionKind = SchemeGroupVersion.WithKind(AppDeploymentKind)
-)
-
-// Cluster type metadata.
-var (
-	ClusterKind            = reflect.TypeOf(Cluster{}).Name()
-	ClusterGroupKind       = schema.GroupKind{Group: Group, Kind: ClusterKind}.String()
-	ClusterKindAPIVersion  = ApplicationKind + "." + SchemeGroupVersion.String()
-	ClusterKindVersionKind = SchemeGroupVersion.WithKind(ClusterKind)
-)
-
-// Initializer type metadata.
-var (
-	InitializerKind            = reflect.TypeOf(Initializer{}).Name()
-	InitializerGroupKind       = schema.GroupKind{Group: Group, Kind: InitializerKind}.String()
-	InitializerKindAPIVersion  = InitializerKind + "." + SchemeGroupVersion.String()
-	InitializerKindVersionKind = SchemeGroupVersion.WithKind(InitializerKind)
-)
-
 func init() {
 	SchemeBuilder.Register(&ComponentDefinition{}, &ComponentDefinitionList{})
 	SchemeBuilder.Register(&WorkloadDefinition{}, &WorkloadDefinitionList{})
@@ -158,10 +129,11 @@ func init() {
 	SchemeBuilder.Register(&DefinitionRevision{}, &DefinitionRevisionList{})
 	SchemeBuilder.Register(&ScopeDefinition{}, &ScopeDefinitionList{})
 	SchemeBuilder.Register(&Application{}, &ApplicationList{})
-	SchemeBuilder.Register(&AppRollout{}, &AppRolloutList{})
 	SchemeBuilder.Register(&ApplicationRevision{}, &ApplicationRevisionList{})
-	SchemeBuilder.Register(&AppDeployment{}, &AppDeploymentList{})
-	SchemeBuilder.Register(&Cluster{}, &ClusterList{})
 	SchemeBuilder.Register(&ResourceTracker{}, &ResourceTrackerList{})
-	SchemeBuilder.Register(&Initializer{}, &InitializerList{})
+}
+
+// Resource takes an unqualified resource and returns a Group qualified GroupResource
+func Resource(resource string) schema.GroupResource {
+	return SchemeGroupVersion.WithResource(resource).GroupResource()
 }

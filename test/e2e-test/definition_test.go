@@ -30,6 +30,7 @@ import (
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/common"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
 	"github.com/oam-dev/kubevela/apis/types"
+	"github.com/oam-dev/kubevela/pkg/oam"
 	"github.com/oam-dev/kubevela/pkg/oam/util"
 )
 
@@ -64,7 +65,7 @@ var _ = Describe("ComponentDefinition Normal tests", func() {
 		It("Test componentDefinition which only set type field", func() {
 			workDef := &v1beta1.WorkloadDefinition{
 				TypeMeta: metav1.TypeMeta{
-					Kind:       "ComponentDefinition",
+					Kind:       "WorkloadDefinition",
 					APIVersion: "core.oam.dev/v1beta1",
 				},
 				ObjectMeta: metav1.ObjectMeta{
@@ -79,6 +80,10 @@ var _ = Describe("ComponentDefinition Normal tests", func() {
 			}
 			workDef.SetNamespace(namespace)
 			Expect(k8sClient.Create(ctx, workDef)).Should(BeNil())
+			getWd := new(v1beta1.WorkloadDefinition)
+			Eventually(func() error {
+				return k8sClient.Get(ctx, client.ObjectKey{Name: workDef.Name, Namespace: namespace}, getWd)
+			}, 15*time.Second, time.Second).Should(BeNil())
 
 			cd := webServiceWithNoTemplate.DeepCopy()
 			cd.Spec.Workload.Definition = common.WorkloadGVK{}
@@ -86,7 +91,10 @@ var _ = Describe("ComponentDefinition Normal tests", func() {
 			cd.SetNamespace(namespace)
 			cd.SetName("test-componentdef")
 			cd.Spec.Schematic.CUE.Template = webServiceV1Template
-			Expect(k8sClient.Create(ctx, cd)).Should(Succeed())
+
+			Eventually(func() error {
+				return k8sClient.Create(ctx, cd)
+			}, 5*time.Second, time.Second).Should(BeNil())
 
 			defRev := new(v1beta1.DefinitionRevision)
 			Eventually(func() error {
@@ -151,6 +159,64 @@ var _ = Describe("ComponentDefinition Normal tests", func() {
 			testCd3.Spec.Schematic.CUE.Template = webServiceV1Template
 			testCd3.SetNamespace(namespace)
 			Expect(k8sClient.Create(ctx, testCd3)).Should(HaveOccurred())
+		})
+
+		It("Test componentDefinition which specify the name of definitionRevision", func() {
+			By("create componentDefinition")
+			cd := webServiceWithNoTemplate.DeepCopy()
+			cd.SetNamespace(namespace)
+			cd.SetName("test-def-specify-revision")
+			cd.SetAnnotations(map[string]string{
+				oam.AnnotationDefinitionRevisionName: "1.1.1",
+			})
+			cd.Spec.Schematic.CUE.Template = webServiceV1Template
+			Expect(k8sClient.Create(ctx, cd)).Should(Succeed())
+
+			By("check definitionRevision created by controller")
+			defRev := new(v1beta1.DefinitionRevision)
+			Eventually(func() error {
+				return k8sClient.Get(ctx, client.ObjectKey{Name: fmt.Sprintf("%s-v%s", cd.Name, "1.1.1"), Namespace: namespace}, defRev)
+			}, 15*time.Second, time.Second).Should(BeNil())
+
+			By("update componentDefinition")
+			oldCd := new(v1beta1.ComponentDefinition)
+			Eventually(func() error {
+				return k8sClient.Get(ctx, client.ObjectKey{Name: cd.Name, Namespace: namespace}, oldCd)
+			}, 15*time.Second, time.Second).Should(BeNil())
+
+			newCd := oldCd.DeepCopy()
+			cd.Spec.Schematic.CUE.Template = webServiceV2Template
+			Expect(k8sClient.Create(ctx, newCd)).Should(HaveOccurred())
+		})
+	})
+
+	Context("Test dynamic admission control for traitDefinition", func() {
+		It("Test traitDefinition which specify the name of definitionRevision", func() {
+			By("create traitDefinition")
+			td := exposeWithNoTemplate.DeepCopy()
+			td.SetNamespace(namespace)
+			td.SetName("test-td-specify-revision")
+			td.SetAnnotations(map[string]string{
+				oam.AnnotationDefinitionRevisionName: "1.1.1",
+			})
+			td.Spec.Schematic.CUE.Template = exposeV1Template
+			Expect(k8sClient.Create(ctx, td)).Should(Succeed())
+
+			By("check definitionRevision created by controller")
+			defRev := new(v1beta1.DefinitionRevision)
+			Eventually(func() error {
+				return k8sClient.Get(ctx, client.ObjectKey{Name: fmt.Sprintf("%s-v%s", td.Name, "1.1.1"), Namespace: namespace}, defRev)
+			}, 15*time.Second, time.Second).Should(BeNil())
+
+			By("update traitDefinition spec, should be ejected")
+			oldTd := new(v1beta1.TraitDefinition)
+			Eventually(func() error {
+				return k8sClient.Get(ctx, client.ObjectKey{Name: td.Name, Namespace: namespace}, oldTd)
+			}, 15*time.Second, time.Second).Should(BeNil())
+
+			newTd := oldTd.DeepCopy()
+			newTd.Spec.Schematic.CUE.Template = exposeV2Template
+			Expect(k8sClient.Create(ctx, newTd)).Should(HaveOccurred())
 		})
 	})
 })

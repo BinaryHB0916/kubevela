@@ -1,8 +1,6 @@
 apiVersion: core.oam.dev/v1beta1
 kind: ApplicationRevision
 metadata:
-  annotations:
-    oam.dev/kubevela-version: undefined
   generation: 1
   labels:
     app.oam.dev/app-revision-hash: c2207054644744d
@@ -43,14 +41,7 @@ spec:
           image: busybox
           lives: "3"
         type: myworker
-    status:
-      rollout:
-        batchRollingState: ""
-        currentBatch: 0
-        lastTargetAppRevision: ""
-        rollingState: ""
-        upgradedReadyReplicas: 0
-        upgradedReplicas: 0
+    status: {}
   applicationConfiguration:
     apiVersion: core.oam.dev/v1alpha2
     kind: ApplicationConfiguration
@@ -71,6 +62,7 @@ spec:
                 trait.oam.dev/resource: service
                 trait.oam.dev/type: myingress
               name: myweb-1
+              namespace: default
             spec:
               ports:
               - port: 80
@@ -88,6 +80,7 @@ spec:
                 trait.oam.dev/resource: ingress
                 trait.oam.dev/type: myingress
               name: myweb-1
+              namespace: default
             spec:
               rules:
               - host: www.example.com
@@ -107,6 +100,8 @@ spec:
                 app.oam.dev/name: livediff-demo
                 trait.oam.dev/resource: scaler
                 trait.oam.dev/type: myscaler
+              name: myweb-1-myscaler-69ccc5855d
+              namespace: default
             spec:
               replicaCount: 2
       - componentName: myweb-2
@@ -122,15 +117,14 @@ spec:
       spec:
         schematic:
           cue:
-            template: "import (\n   apps \"kube/apps/v1\"\n)\noutput: apps.#Deployment\noutput:
-              {\n\tspec: {\n\t\tselector: matchLabels: {\n\t\t\t\"app.oam.dev/component\":
-              context.name\n\t\t}\n\n\t\ttemplate: {\n\t\t\tmetadata: labels: {\n\t\t\t\t\"app.oam.dev/component\":
-              context.name\n\t\t\t}\n\n\t\t\tspec: {\n\t\t\t\tcontainers: [{\n\t\t\t\t\tname:
-              \ context.name\n\t\t\t\t\timage: parameter.image\n\n\t\t\t\t\tif parameter[\"cmd\"]
-              != _|_ {\n\t\t\t\t\t\tcommand: parameter.cmd\n\t\t\t\t\t}\n\t\t\t\t}]\n\t\t\t}\n\t\t}\n\t}\n}\n\nparameter:
-              {\n\t// +usage=Which image would you like to use for your service\n\t//
-              +short=i\n\timage: string\n\t// +usage=Commands to run in the container\n\tcmd?:
-              [...string]\n}\n"
+            template: "output: {\n  apiVersion: \"apps/v1\"\n  kind: \"Deployment\"\n}\noutput:
+        {\n\tspec: {\n\t\tselector: matchLabels: {\n\t\t\t\"app.oam.dev/component\":
+        context.name\n\t\t}\n\n\t\ttemplate: {\n\t\t\tmetadata: labels: {\n\t\t\t\t\"app.oam.dev/component\":
+        context.name\n\t\t\t}\n\n\t\t\tspec: {\n\t\t\t\tcontainers: [{\n\t\t\t\t\tname:
+        \ context.name\n\t\t\t\t\timage: parameter.image\n\n\t\t\t\t\tif parameter[\"cmd\"]
+        != _|_ {\n\t\t\t\t\t\tcommand: parameter.cmd\n\t\t\t\t\t}\n\t\t\t\t}]\n\t\t\t}\n\t\t}\n\t}\n}\n\nparameter:
+        {\n\t// +usage=Which image would you like to use for your service\n\t// +short=i\n\timage:
+        string\n\t// +usage=Commands to run in the container\n\tcmd?: [...string]\n}\n"
         workload:
           definition:
             apiVersion: apps/v1
@@ -155,6 +149,8 @@ spec:
               app.oam.dev/component: myweb-1
               app.oam.dev/name: livediff-demo
               workload.oam.dev/type: myworker
+            name: myweb-1
+            namespace: default
           spec:
             selector:
               matchLabels:
@@ -189,6 +185,8 @@ spec:
               app.oam.dev/component: myweb-2
               app.oam.dev/name: livediff-demo
               workload.oam.dev/type: myworker
+            name: myweb-2
+            namespace: default
           spec:
             selector:
               matchLabels:
@@ -220,18 +218,17 @@ spec:
           name: ""
         schematic:
           cue:
-            template: "import (\n\tkubev1 \"kube/v1\"\n\tnetwork \"kube/networking.k8s.io/v1beta1\"\n)\n\nparameter:
-              {\n\tdomain: string\n\thttp: [string]: int\n}\n\noutputs: {\nservice:
-              kubev1.#Service\ningress: network.#Ingress\n}\n\n// trait template can
-              have multiple outputs in one trait\noutputs: service: {\n\tmetadata:\n\t\tname:
-              context.name\n\tspec: {\n\t\tselector:\n\t\t\t\"app.oam.dev/component\":
-              context.name\n\t\tports: [\n\t\t\tfor k, v in parameter.http {\n\t\t\t\tport:
-              \      v\n\t\t\t\ttargetPort: v\n\t\t\t},\n\t\t]\n\t}\n}\n\noutputs:
-              ingress: {\n\tmetadata:\n\t\tname: context.name\n\tspec: {\n\t\trules:
-              [{\n\t\t\thost: parameter.domain\n\t\t\thttp: {\n\t\t\t\tpaths: [\n\t\t\t\t\tfor
-              k, v in parameter.http {\n\t\t\t\t\t\tpath: k\n\t\t\t\t\t\tbackend:
-              {\n\t\t\t\t\t\t\tserviceName: context.name\n\t\t\t\t\t\t\tservicePort:
-              v\n\t\t\t\t\t\t}\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t}\n\t\t}]\n\t}\n}\n"
+            template: "parameter: {\n\tdomain: string\n\thttp: [string]: int\n}\n\noutputs:
+        {\n  service: {\n    apiVersion: \"v1\"\n    kind: \"Service\"\n  }\n  ingress:
+        {\n    apiVersion: \"networking.k8s.io/v1beta1\"\n    kind: \"Ingress\"\n
+        \ }\n}\n\n// trait template can have multiple outputs in one trait\noutputs:
+        service: {\n\tmetadata:\n\t\tname: context.name\n\tspec: {\n\t\tselector:\n\t\t\t\"app.oam.dev/component\":
+        context.name\n\t\tports: [\n\t\t\tfor k, v in parameter.http {\n\t\t\t\tport:
+        \      v\n\t\t\t\ttargetPort: v\n\t\t\t},\n\t\t]\n\t}\n}\n\noutputs: ingress:
+        {\n\tmetadata:\n\t\tname: context.name\n\tspec: {\n\t\trules: [{\n\t\t\thost:
+        parameter.domain\n\t\t\thttp: {\n\t\t\t\tpaths: [\n\t\t\t\t\tfor k, v in parameter.http
+        {\n\t\t\t\t\t\tpath: k\n\t\t\t\t\t\tbackend: {\n\t\t\t\t\t\t\tserviceName:
+        context.name\n\t\t\t\t\t\t\tservicePort: v\n\t\t\t\t\t\t}\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t}\n\t\t}]\n\t}\n}\n"
       status: {}
     myscaler:
       apiVersion: core.oam.dev/v1beta1

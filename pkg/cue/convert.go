@@ -22,19 +22,34 @@ import (
 	"strings"
 
 	"cuelang.org/go/cue"
+	"cuelang.org/go/cue/build"
 
 	"github.com/oam-dev/kubevela/apis/types"
+	"github.com/oam-dev/kubevela/pkg/cue/model"
+	"github.com/oam-dev/kubevela/pkg/cue/packages"
 )
 
-// ParameterTag is the keyword in CUE template to define users' input
-var ParameterTag = "parameter"
-
 // GetParameters get parameter from cue template
-func GetParameters(templateStr string) ([]types.Parameter, error) {
-	r := cue.Runtime{}
-	template, err := r.Compile("", templateStr+BaseTemplate)
-	if err != nil {
-		return nil, err
+func GetParameters(templateStr string, pd *packages.PackageDiscover) ([]types.Parameter, error) {
+	var template *cue.Instance
+	var err error
+	if pd != nil {
+		bi := build.NewContext().NewInstance("", nil)
+		err := bi.AddFile("-", templateStr+BaseTemplate)
+		if err != nil {
+			return nil, err
+		}
+
+		template, err = pd.ImportPackagesAndBuildInstance(bi)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		r := cue.Runtime{}
+		template, err = r.Compile("", templateStr+BaseTemplate)
+		if err != nil {
+			return nil, err
+		}
 	}
 	tempStruct, err := template.Value().Struct()
 	if err != nil {
@@ -45,7 +60,7 @@ func GetParameters(templateStr string) ([]types.Parameter, error) {
 	var found bool
 	for i := 0; i < tempStruct.Len(); i++ {
 		paraDef = tempStruct.Field(i)
-		if paraDef.Name == ParameterTag {
+		if paraDef.Name == model.ParameterFieldName {
 			found = true
 			break
 		}

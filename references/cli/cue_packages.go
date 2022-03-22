@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"github.com/gosuri/uitable"
-
 	"github.com/spf13/cobra"
 
 	"github.com/oam-dev/kubevela/pkg/utils/common"
@@ -33,12 +32,11 @@ func NewCUEPackageCommand(c common.Args, ioStreams cmdutil.IOStreams) *cobra.Com
 	cmd := &cobra.Command{
 		Use:                   "cue-packages",
 		DisableFlagsInUseLine: true,
+		Hidden:                true,
 		Short:                 "List cue package",
-		Long:                  "List cue package",
-		Example:               `vela system cue-packages`,
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return c.SetConfig()
-		},
+		Long:                  "List CUE packages available.",
+		Example:               `vela cue-packages`,
+		Annotations:           map[string]string{},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return printCUEPackageList(c, ioStreams)
 		},

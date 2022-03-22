@@ -19,12 +19,8 @@ limitations under the License.
 package v1alpha2
 
 import (
-	runtimev1alpha1 "github.com/crossplane/crossplane-runtime/apis/core/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-
-	"github.com/oam-dev/kubevela/pkg/oam"
 )
 
 // An OperatingSystem required by a containerised workload.
@@ -356,54 +352,4 @@ type Container struct {
 	// credentials required to pull this container's image can be loaded.
 	// +optional
 	ImagePullSecret *string `json:"imagePullSecret,omitempty"`
-}
-
-// A ContainerizedWorkloadSpec defines the desired state of a
-// ContainerizedWorkload.
-type ContainerizedWorkloadSpec struct {
-	// OperatingSystem required by this workload.
-	// +kubebuilder:validation:Enum=linux;windows
-	// +optional
-	OperatingSystem *OperatingSystem `json:"osType,omitempty"`
-
-	// CPUArchitecture required by this workload.
-	// +kubebuilder:validation:Enum=i386;amd64;arm;arm64
-	// +optional
-	CPUArchitecture *CPUArchitecture `json:"arch,omitempty"`
-
-	// Containers of which this workload consists.
-	Containers []Container `json:"containers"`
-}
-
-// A ContainerizedWorkloadStatus represents the observed state of a
-// ContainerizedWorkload.
-type ContainerizedWorkloadStatus struct {
-	runtimev1alpha1.ConditionedStatus `json:",inline"`
-
-	// Resources managed by this containerised workload.
-	Resources []runtimev1alpha1.TypedReference `json:"resources,omitempty"`
-}
-
-var _ oam.Workload = &ContainerizedWorkload{}
-
-// +kubebuilder:object:root=true
-
-// A ContainerizedWorkload is a workload that runs OCI containers.
-// +kubebuilder:resource:categories={oam}
-// +kubebuilder:subresource:status
-type ContainerizedWorkload struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   ContainerizedWorkloadSpec   `json:"spec,omitempty"`
-	Status ContainerizedWorkloadStatus `json:"status,omitempty"`
-}
-
-// +kubebuilder:object:root=true
-
-// ContainerizedWorkloadList contains a list of ContainerizedWorkload.
-type ContainerizedWorkloadList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ContainerizedWorkload `json:"items"`
 }

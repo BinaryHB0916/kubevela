@@ -18,16 +18,15 @@ package plugins
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/ghodss/yaml"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	crdv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -37,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/yaml"
 
 	coreoam "github.com/oam-dev/kubevela/apis/core.oam.dev"
 	corev1beta1 "github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
@@ -49,7 +49,6 @@ import (
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
 
 var cfg *rest.Config
-var scheme *runtime.Scheme
 var k8sClient client.Client
 var testEnv *envtest.Environment
 var definitionDir string
@@ -71,18 +70,20 @@ var _ = BeforeSuite(func(done Done) {
 	By("bootstrapping test environment")
 	useExistCluster := false
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:  []string{filepath.Join("..", "..", "charts", "vela-core", "crds")},
-		UseExistingCluster: &useExistCluster,
+		ControlPlaneStartTimeout: time.Minute,
+		ControlPlaneStopTimeout:  time.Minute,
+		CRDDirectoryPaths:        []string{filepath.Join("..", "..", "charts", "vela-core", "crds")},
+		UseExistingCluster:       &useExistCluster,
 	}
 
 	var err error
 	cfg, err = testEnv.Start()
 	Expect(err).ToNot(HaveOccurred())
 	Expect(cfg).ToNot(BeNil())
-	scheme = runtime.NewScheme()
+	scheme := runtime.NewScheme()
 	Expect(coreoam.AddToScheme(scheme)).NotTo(HaveOccurred())
 	Expect(clientgoscheme.AddToScheme(scheme)).NotTo(HaveOccurred())
-	Expect(v1beta1.AddToScheme(scheme)).NotTo(HaveOccurred())
+	Expect(crdv1.AddToScheme(scheme)).NotTo(HaveOccurred())
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
 	Expect(err).ToNot(HaveOccurred())
 	Expect(k8sClient).ToNot(BeNil())
@@ -93,7 +94,7 @@ var _ = BeforeSuite(func(done Done) {
 
 	Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefinitionNamespace}})).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
 
-	workloaddata, err := ioutil.ReadFile("testdata/workloadDef.yaml")
+	workloaddata, err := os.ReadFile("testdata/workloadDef.yaml")
 	Expect(err).Should(BeNil())
 
 	Expect(yaml.Unmarshal(workloaddata, &wd)).Should(BeNil())
@@ -102,7 +103,7 @@ var _ = BeforeSuite(func(done Done) {
 	logf.Log.Info("Creating workload definition", "data", wd)
 	Expect(k8sClient.Create(ctx, &wd)).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
 
-	componentdata, err := ioutil.ReadFile("testdata/componentDef.yaml")
+	componentdata, err := os.ReadFile("testdata/componentDef.yaml")
 	Expect(err).Should(BeNil())
 
 	Expect(yaml.Unmarshal(componentdata, &cd)).Should(BeNil())
@@ -111,7 +112,7 @@ var _ = BeforeSuite(func(done Done) {
 	logf.Log.Info("Creating component definition", "data", cd)
 	Expect(k8sClient.Create(ctx, &cd)).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
 
-	websvcWorkloadData, err := ioutil.ReadFile("testdata/websvcWorkloadDef.yaml")
+	websvcWorkloadData, err := os.ReadFile("testdata/websvcWorkloadDef.yaml")
 	Expect(err).Should(BeNil())
 
 	Expect(yaml.Unmarshal(websvcWorkloadData, &websvcWD)).Should(BeNil())
@@ -119,7 +120,7 @@ var _ = BeforeSuite(func(done Done) {
 	logf.Log.Info("Creating workload definition whose CUE template from remote", "data", &websvcWD)
 	Expect(k8sClient.Create(ctx, &websvcWD)).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
 
-	websvcComponentDefData, err := ioutil.ReadFile("testdata/websvcComponentDef.yaml")
+	websvcComponentDefData, err := os.ReadFile("testdata/websvcComponentDef.yaml")
 	Expect(err).Should(BeNil())
 
 	Expect(yaml.Unmarshal(websvcComponentDefData, &websvcCD)).Should(BeNil())

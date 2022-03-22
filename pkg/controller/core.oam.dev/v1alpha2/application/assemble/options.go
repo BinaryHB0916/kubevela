@@ -22,6 +22,8 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/oam-dev/kubevela/pkg/oam"
+
 	"github.com/crossplane/crossplane-runtime/pkg/fieldpath"
 	kruisev1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 	"github.com/pkg/errors"
@@ -116,8 +118,14 @@ func discoverHelmModuleWorkload(ctx context.Context, c client.Reader, assembledW
 // PrepareWorkloadForRollout prepare the workload before it is emit to the k8s. The current approach is to mark it
 // as disabled so that it's spec won't take effect immediately. The rollout controller can take over the resources
 // and enable it on its own since app controller here won't override their change
-func PrepareWorkloadForRollout() WorkloadOption {
+func PrepareWorkloadForRollout(rolloutComp string) WorkloadOption {
 	return WorkloadOptionFn(func(assembledWorkload *unstructured.Unstructured, _ *v1beta1.ComponentDefinition, _ []*unstructured.Unstructured) error {
+
+		compName := assembledWorkload.GetLabels()[oam.LabelAppComponent]
+		if compName != rolloutComp {
+			return nil
+		}
+
 		const (
 			// below are the resources that we know how to disable
 			cloneSetDisablePath            = "spec.updateStrategy.paused"
@@ -127,7 +135,6 @@ func PrepareWorkloadForRollout() WorkloadOption {
 		pv := fieldpath.Pave(assembledWorkload.UnstructuredContent())
 		// TODO: we can get the workloadDefinition name from workload.GetLabels()["oam.WorkloadTypeLabel"]
 		// and use a special field like "disablePath" in the definition to allow configurable behavior
-
 		// we hard code the behavior depends on the known assembledWorkload.group/kind for now.
 		if assembledWorkload.GroupVersionKind().Group == kruisev1alpha1.GroupVersion.Group {
 			switch assembledWorkload.GetKind() {
@@ -148,15 +155,21 @@ func PrepareWorkloadForRollout() WorkloadOption {
 					"kind", assembledWorkload.GetKind(), "instance name", assembledWorkload.GetName())
 				return nil
 			}
-		} else if assembledWorkload.GroupVersionKind().Group == appsv1.GroupName &&
-			assembledWorkload.GetKind() == reflect.TypeOf(appsv1.Deployment{}).Name() {
-			err := pv.SetBool(deploymentDisablePath, true)
-			if err != nil {
-				return err
+		}
+
+		if assembledWorkload.GroupVersionKind().Group == appsv1.GroupName {
+			switch assembledWorkload.GetKind() {
+			case reflect.TypeOf(appsv1.Deployment{}).Name():
+				if err := pv.SetBool(deploymentDisablePath, true); err != nil {
+					return err
+				}
+				klog.InfoS("we render a deployment assembledWorkload.paused on the first time",
+					"kind", assembledWorkload.GetKind(), "instance name", assembledWorkload.GetName())
+				return nil
+			case reflect.TypeOf(appsv1.StatefulSet{}).Name():
+				// TODO: Pause StatefulSet here.
+				return nil
 			}
-			klog.InfoS("we render a deployment assembledWorkload.paused on the first time",
-				"kind", assembledWorkload.GetKind(), "instance name", assembledWorkload.GetName())
-			return nil
 		}
 
 		klog.InfoS("we encountered an unknown resource, we don't know how to prepare it",

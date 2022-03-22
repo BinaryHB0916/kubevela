@@ -17,12 +17,9 @@ limitations under the License.
 package cli
 
 import (
-	"io/ioutil"
-	"path/filepath"
-
-	"github.com/ghodss/yaml"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
 
 	corev1beta1 "github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
 	"github.com/oam-dev/kubevela/apis/types"
@@ -31,25 +28,20 @@ import (
 	"github.com/oam-dev/kubevela/references/common"
 )
 
-var (
-	appFilePath string
-)
-
 // NewUpCommand will create command for applying an AppFile
-func NewUpCommand(c common2.Args, ioStream cmdutil.IOStreams) *cobra.Command {
+func NewUpCommand(c common2.Args, order string, ioStream cmdutil.IOStreams) *cobra.Command {
+	appFilePath := new(string)
 	cmd := &cobra.Command{
 		Use:                   "up",
 		DisableFlagsInUseLine: true,
-		Short:                 "Apply an appfile",
-		Long:                  "Apply an appfile",
+		Short:                 "Apply an appfile or application from file",
+		Long:                  "Create or update vela application from file or URL, both appfile or application object format are supported.",
 		Annotations: map[string]string{
-			types.TagCommandType: types.TypeStart,
-		},
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return c.SetConfig()
+			types.TagCommandOrder: order,
+			types.TagCommandType:  types.TypeStart,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			velaEnv, err := GetEnv(cmd)
+			namespace, err := GetFlagNamespaceOrEnv(cmd, c)
 			if err != nil {
 				return err
 			}
@@ -57,36 +49,41 @@ func NewUpCommand(c common2.Args, ioStream cmdutil.IOStreams) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			filePath, err := cmd.Flags().GetString(appFilePath)
+
+			body, err := common.ReadRemoteOrLocalPath(*appFilePath)
 			if err != nil {
 				return err
 			}
-			fileContent, err := ioutil.ReadFile(filepath.Clean(filePath))
-			if err != nil {
-				return err
+
+			if common.IsAppfile(body) {
+				o := &common.AppfileOptions{
+					Kubecli:   kubecli,
+					IO:        ioStream,
+					Namespace: namespace,
+				}
+				return o.Run(*appFilePath, o.Namespace, c)
 			}
 			var app corev1beta1.Application
-			err = yaml.Unmarshal(fileContent, &app)
+			err = yaml.Unmarshal(body, &app)
 			if err != nil {
-				return errors.Wrap(err, "File format is illegal")
+				return errors.Wrap(err, "File format is illegal, only support vela appfile format or OAM Application object yaml")
 			}
-			if app.APIVersion != "" && app.Kind != "" {
-				err = common.ApplyApplication(app, ioStream, kubecli)
-				if err != nil {
-					return err
-				}
-			} else {
-				o := &common.AppfileOptions{
-					Kubecli: kubecli,
-					IO:      ioStream,
-					Env:     velaEnv,
-				}
-				return o.Run(filePath, velaEnv.Namespace, c)
+
+			// Override namespace if namespace flag is set. We should check if namespace is `default` or not
+			// since GetFlagNamespaceOrEnv returns default namespace when failed to get current env.
+			if namespace != "" && namespace != types.DefaultAppNamespace {
+				app.SetNamespace(namespace)
+			}
+			err = common.ApplyApplication(app, ioStream, kubecli)
+			if err != nil {
+				return err
 			}
 			return nil
 		},
 	}
 	cmd.SetOut(ioStream.Out)
-	cmd.Flags().StringP(appFilePath, "f", "", "specify file path for appfile")
+	cmd.Flags().StringVarP(appFilePath, "file", "f", "", "specify file path for appfile or application, it could be a remote url.")
+
+	addNamespaceAndEnvArg(cmd)
 	return cmd
 }

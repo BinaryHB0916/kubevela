@@ -27,28 +27,24 @@ import (
 
 // NewExportCommand will create command for exporting deploy manifests from an AppFile
 func NewExportCommand(c common2.Args, ioStream cmdutil.IOStreams) *cobra.Command {
+	appFilePath := new(string)
 	cmd := &cobra.Command{
 		Use:                   "export",
 		DisableFlagsInUseLine: true,
 		Short:                 "Export deploy manifests from appfile",
-		Long:                  "Export deploy manifests from appfile",
+		Long:                  "Export deploy manifests from appfile or application.",
 		Annotations: map[string]string{
-			types.TagCommandType: types.TypeStart,
+			types.TagCommandType: types.TypeSystem,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			velaEnv, err := GetEnv(cmd)
+			namespace, err := GetFlagNamespaceOrEnv(cmd, c)
 			if err != nil {
 				return err
 			}
 			o := &common.AppfileOptions{
-				IO:  ioStream,
-				Env: velaEnv,
+				IO: ioStream,
 			}
-			filePath, err := cmd.Flags().GetString(appFilePath)
-			if err != nil {
-				return err
-			}
-			_, data, err := o.Export(filePath, velaEnv.Namespace, true, c)
+			_, data, err := o.Export(*appFilePath, namespace, true, c)
 			if err != nil {
 				return err
 			}
@@ -58,6 +54,7 @@ func NewExportCommand(c common2.Args, ioStream cmdutil.IOStreams) *cobra.Command
 	}
 	cmd.SetOut(ioStream.Out)
 
-	cmd.Flags().StringP(appFilePath, "f", "", "specify file path for appfile")
+	addNamespaceAndEnvArg(cmd)
+	cmd.Flags().StringVarP(appFilePath, "file", "f", "", "specify file path for appfile")
 	return cmd
 }

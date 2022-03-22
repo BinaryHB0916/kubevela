@@ -181,6 +181,107 @@ containers: [{
 }, ...]
 `,
 		},
+		{
+			base: `envFrom: [{
+					secretRef: {
+						name:  "nginx-rds"
+					}},...]`,
+			patch: `
+// +patchKey=secretRef.name
+envFrom: [{
+					secretRef: {
+						name:  "nginx-redis"
+					}},...]
+`,
+			result: `// +patchKey=secretRef.name
+envFrom: [{
+	secretRef: {
+		name: "nginx-rds"
+	}
+}, {
+	secretRef: {
+		name: "nginx-redis"
+	}
+}, ...]
+`},
+		{
+			base: `
+             containers: [{
+                 name: "c1"
+             },{
+                 name: "c2"
+                 envFrom: [{
+					secretRef: {
+						name:  "nginx-rds"
+                 }},...]
+             },...]`,
+			patch: `
+             // +patchKey=name
+             containers: [{
+                 name: "c2"
+                 // +patchKey=secretRef.name
+                 envFrom: [{
+					secretRef: {
+						name:  "nginx-redis"
+                 }},...]
+             }]`,
+			result: `// +patchKey=name
+containers: [{
+	name: "c1"
+}, {
+	name: "c2"
+	// +patchKey=secretRef.name
+	envFrom: [{
+		secretRef: {
+			name: "nginx-rds"
+		}
+	}, {
+		secretRef: {
+			name: "nginx-redis"
+		}
+	}, ...]
+}, ...]
+`},
+
+		{
+			base: `
+             containers: [{
+               volumeMounts: [{name: "k1", path: "p1"},{name: "k1", path: "p2"},...]
+             },...]
+			volumes: [{name: "x1",value: "v1"},{name: "x2",value: "v2"},...]
+`,
+
+			patch: `
+			 // +patchKey=name
+             volumes: [{name: "x1",value: "v1"},{name: "x3",value: "x2"}]
+             
+             containers: [{
+               volumeMounts: [{name: "k1", path: "p1"},{name: "k1", path: "p2"},{ name:"k2", path: "p3"}]
+             },...]`,
+			result: `containers: [{
+	volumeMounts: [{
+		path: "p1"
+		name: "k1"
+	}, {
+		path: "p2"
+		name: "k1"
+	}, {
+		path: "p3"
+		name: "k2"
+	}]
+}, ...]
+// +patchKey=name
+volumes: [{
+	name:  "x1"
+	value: "v1"
+}, {
+	name:  "x2"
+	value: "v2"
+}, {
+	name:  "x3"
+	value: "x2"
+}, ...]
+`},
 	}
 
 	for i, tcase := range testCase {
@@ -367,8 +468,32 @@ spec: {
 		envs: [{
 			name:  "e1"
 			value: "v2"
-		}]
-	}]
+		}, ...]
+	}, ...]
+}
+`}, {
+			base: `
+kind: "Old"
+metadata: {
+	name: "Old"
+	labels: keep: "true"
+}
+`,
+			patch: `// +patchStrategy=retainKeys
+kind: "New"
+metadata: {
+	// +patchStrategy=retainKeys
+	name: "New"
+}
+`,
+			result: `	// +patchStrategy=retainKeys
+kind: "New"
+metadata: {
+	// +patchStrategy=retainKeys
+	name: "New"
+	labels: {
+		keep: "true"
+	}
 }
 `},
 	}

@@ -95,14 +95,14 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       componentName,
 						Type:       "worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"image": "nginx:latest"}`)},
-						Traits: []v1beta1.ApplicationTrait{{
+						Properties: &runtime.RawExtension{Raw: []byte(`{"image": "nginx:latest"}`)},
+						Traits: []common.ApplicationTrait{{
 							Type:       "cluster-scope-trait",
-							Properties: runtime.RawExtension{Raw: []byte("{}")},
+							Properties: &runtime.RawExtension{Raw: []byte("{}")},
 						}},
 					},
 				},
@@ -118,9 +118,6 @@ var _ = Describe("Test application cross namespace resource", func() {
 		Eventually(func() error {
 			return k8sClient.Get(ctx, client.ObjectKey{Name: "pv-" + componentName, Namespace: namespace}, pv)
 		}, 20*time.Second, 500*time.Millisecond).Should(Succeed())
-		By("Verify cluster-scoped trait's controller is ResourceTracker")
-		controller := metav1.GetControllerOf(pv)
-		Expect(controller.Kind == v1beta1.ResourceTrackerKind).Should(BeTrue())
 
 		By("Delete Application")
 		Expect(k8sClient.Delete(ctx, app)).Should(Succeed())
@@ -173,19 +170,19 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       componentName,
 						Type:       "worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"image": "nginx:latest"}`)},
-						Traits: []v1beta1.ApplicationTrait{
+						Properties: &runtime.RawExtension{Raw: []byte(`{"image": "nginx:latest"}`)},
+						Traits: []common.ApplicationTrait{
 							{
 								Type:       "cluster-scope-trait",
-								Properties: runtime.RawExtension{Raw: []byte("{}")},
+								Properties: &runtime.RawExtension{Raw: []byte("{}")},
 							},
 							{
 								Type:       "cross-scaler",
-								Properties: runtime.RawExtension{Raw: []byte(`{"replicas": 1}`)},
+								Properties: &runtime.RawExtension{Raw: []byte(`{"replicas": 1}`)},
 							},
 						},
 					},
@@ -202,9 +199,6 @@ var _ = Describe("Test application cross namespace resource", func() {
 		Eventually(func() error {
 			return k8sClient.Get(ctx, client.ObjectKey{Name: "pv-" + componentName, Namespace: namespace}, pv)
 		}, 60*time.Second, time.Second).Should(Succeed())
-		By("Verify cluster-scoped trait's controller is ResourceTracker")
-		controller := metav1.GetControllerOf(pv)
-		Expect(controller.Kind == v1beta1.ResourceTrackerKind).Should(BeTrue())
 
 		By("Remove the cluster-scope trait from application ")
 		app = &v1beta1.Application{
@@ -213,12 +207,12 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       componentName,
 						Type:       "worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"image": "nginx:latest"}`)},
-						Traits: []v1beta1.ApplicationTrait{
+						Properties: &runtime.RawExtension{Raw: []byte(`{"image": "nginx:latest"}`)},
+						Traits: []common.ApplicationTrait{
 							// remove the cluster-scoped trait and keep the
 							// cross-namespaced trait.
 							// if remove both, the resouce tracker will be deleted,
@@ -226,7 +220,7 @@ var _ = Describe("Test application cross namespace resource", func() {
 							// not cascading deletion
 							{
 								Type:       "cross-scaler",
-								Properties: runtime.RawExtension{Raw: []byte(`{"replicas": 1}`)},
+								Properties: &runtime.RawExtension{Raw: []byte(`{"replicas": 1}`)},
 							}},
 					},
 				},
@@ -248,7 +242,7 @@ var _ = Describe("Test application cross namespace resource", func() {
 
 		By("Verify cluster-scoped trait is deleted")
 		Eventually(func() error {
-			requestReconcileNow(ctx, app)
+			RequestReconcileNow(ctx, app)
 			return k8sClient.Get(ctx, client.ObjectKey{Name: "pv-" + componentName, Namespace: namespace}, pv)
 		}, 20*time.Second, 2*time.Second).Should(SatisfyAll(&util.NotFoundMatcher{}))
 	})
@@ -270,11 +264,11 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       componentName,
 						Type:       "cross-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
 					},
 				},
 			},
@@ -317,14 +311,11 @@ var _ = Describe("Test application cross namespace resource", func() {
 				return fmt.Errorf("error workload number %v", err)
 			}
 			workload = depolys.Items[0]
-			if len(workload.OwnerReferences) != 1 || workload.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("wrokload ownerreference error")
-			}
-			if len(checkRt.Status.TrackedResources) != 1 {
+			if len(checkRt.Spec.ManagedResources) != 1 {
 				return fmt.Errorf("resourceTracker status recode trackedResource length missmatch")
 			}
-			if checkRt.Status.TrackedResources[0].Name != workload.Name {
-				return fmt.Errorf("resourceTracker status recode trackedResource name mismatch recorded %s, actually %s", checkRt.Status.TrackedResources[0].Name, workload.Name)
+			if checkRt.Spec.ManagedResources[0].Name != workload.Name {
+				return fmt.Errorf("resourceTracker status recode trackedResource name mismatch recorded %s, actually %s", checkRt.Spec.ManagedResources[0].Name, workload.Name)
 			}
 			return nil
 		}, time.Second*5, time.Millisecond*300).Should(BeNil())
@@ -351,7 +342,7 @@ var _ = Describe("Test application cross namespace resource", func() {
 		}, time.Second*5, time.Millisecond*300).Should(BeNil())
 	})
 
-	It("Test update application by add  a cross namespace trait resource ", func() {
+	It("Test update application by add a cross namespace trait resource ", func() {
 		var (
 			appName       = "test-app-2"
 			app           = new(v1beta1.Application)
@@ -375,11 +366,11 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       componentName,
 						Type:       "normal-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
 					},
 				},
 			},
@@ -394,7 +385,7 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: appName}, app); err != nil {
 				return fmt.Errorf("error to create application %v", err)
 			}
-			if app.Status.Phase != common.ApplicationRunning {
+			if app.Status.Phase != common.ApplicationRunning || app.Status.ObservedGeneration != app.Generation {
 				return fmt.Errorf("application status not running")
 			}
 			depolys := new(appsv1.DeploymentList)
@@ -408,10 +399,6 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil || len(depolys.Items) != 1 {
 				return fmt.Errorf("error workload number %v", err)
 			}
-			workload := depolys.Items[0]
-			if len(workload.OwnerReferences) != 1 || workload.OwnerReferences[0].Kind != v1beta1.ResourceTrackerKind {
-				return fmt.Errorf("workload owneRefernece err")
-			}
 			if err = k8sClient.Get(ctx, generateResourceTrackerKey(app.Namespace, app.Name, 1), resourceTracker); err != nil {
 				return err
 			}
@@ -423,10 +410,10 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil {
 				return err
 			}
-			app.Spec.Components[0].Traits = []v1beta1.ApplicationTrait{
+			app.Spec.Components[0].Traits = []common.ApplicationTrait{
 				{
 					Type:       "cross-scaler",
-					Properties: runtime.RawExtension{Raw: []byte(`{"replicas": 1}`)},
+					Properties: &runtime.RawExtension{Raw: []byte(`{"replicas": 1}`)},
 				},
 			}
 			return k8sClient.Update(ctx, app)
@@ -456,12 +443,8 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil || len(mts.Items) != 1 {
 				return fmt.Errorf("failed generate cross namespace trait")
 			}
-			trait := mts.Items[0]
-			if len(trait.OwnerReferences) != 1 || trait.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("trait owner reference missmatch")
-			}
-			if len(resourceTracker.Status.TrackedResources) != 2 {
-				return fmt.Errorf("expect track %q resources, but got %q", 2, len(resourceTracker.Status.TrackedResources))
+			if len(resourceTracker.Spec.ManagedResources) != 2 {
+				return fmt.Errorf("expect track %d resources, but got %d", 2, len(resourceTracker.Spec.ManagedResources))
 			}
 			return nil
 		}, time.Second*5, time.Millisecond*500).Should(BeNil())
@@ -491,15 +474,15 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       componentName,
 						Type:       "normal-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
-						Traits: []v1beta1.ApplicationTrait{
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Traits: []common.ApplicationTrait{
 							{
 								Type:       "cross-scaler",
-								Properties: runtime.RawExtension{Raw: []byte(`{"replicas": 1}`)},
+								Properties: &runtime.RawExtension{Raw: []byte(`{"replicas": 1}`)},
 							},
 						},
 					},
@@ -516,7 +499,7 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: appName}, app); err != nil {
 				return fmt.Errorf("error to get application %v", err)
 			}
-			if app.Status.Phase != common.ApplicationRunning {
+			if app.Status.Phase != common.ApplicationRunning || app.Status.ObservedGeneration != app.Generation {
 				return fmt.Errorf("application status not running")
 			}
 			err := k8sClient.Get(ctx, generateResourceTrackerKey(app.Namespace, app.Name, 1), resourceTracker)
@@ -534,12 +517,8 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil || len(mts.Items) != 1 {
 				return fmt.Errorf("failed generate cross namespace trait")
 			}
-			trait := mts.Items[0]
-			if len(trait.OwnerReferences) != 1 || trait.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("trait owner reference missmatch")
-			}
-			if len(resourceTracker.Status.TrackedResources) != 2 {
-				return fmt.Errorf("expect track %q resources, but got %q", 2, len(resourceTracker.Status.TrackedResources))
+			if len(resourceTracker.Spec.ManagedResources) != 2 {
+				return fmt.Errorf("expect track %q resources, but got %q", 2, len(resourceTracker.Spec.ManagedResources))
 			}
 			return nil
 		}, time.Second*5, time.Millisecond*300).Should(BeNil())
@@ -548,7 +527,7 @@ var _ = Describe("Test application cross namespace resource", func() {
 		Eventually(func() error {
 			app = new(v1beta1.Application)
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: appName}, app)).Should(BeNil())
-			app.Spec.Components[0].Traits = []v1beta1.ApplicationTrait{}
+			app.Spec.Components[0].Traits = []common.ApplicationTrait{}
 			return k8sClient.Update(ctx, app)
 		}, time.Second*5, time.Millisecond*300).Should(BeNil())
 
@@ -603,16 +582,16 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       component1Name,
 						Type:       "normal-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
 					},
 					{
 						Name:       component2Name,
 						Type:       "cross-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
 					},
 				},
 			},
@@ -653,20 +632,12 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil || len(same.Items) != 1 {
 				return fmt.Errorf("failed generate same namespace workload")
 			}
-			sameDeplpoy := same.Items[0]
-			if len(sameDeplpoy.OwnerReferences) != 1 || sameDeplpoy.OwnerReferences[0].Kind != v1beta1.ResourceTrackerKind {
-				return fmt.Errorf("same ns deploy have error ownerReference")
-			}
 			err = k8sClient.List(ctx, cross, crossOpts...)
 			if err != nil || len(cross.Items) != 1 {
 				return fmt.Errorf("failed generate cross namespace trait")
 			}
-			crossDeplpoy := cross.Items[0]
-			if len(sameDeplpoy.OwnerReferences) != 1 || crossDeplpoy.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("same ns deploy have error ownerReference")
-			}
-			if len(resourceTracker.Status.TrackedResources) != 2 {
-				return fmt.Errorf("expect track %q resources, but got %q", 2, len(resourceTracker.Status.TrackedResources))
+			if len(resourceTracker.Spec.ManagedResources) != 2 {
+				return fmt.Errorf("expect track %q resources, but got %q", 2, len(resourceTracker.Spec.ManagedResources))
 			}
 			return nil
 		}, time.Second*5, time.Millisecond*500).Should(BeNil())
@@ -705,10 +676,6 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil || len(same.Items) != 1 {
 				return fmt.Errorf("failed generate same namespace workload")
 			}
-			sameDeplpoy := same.Items[0]
-			if len(sameDeplpoy.OwnerReferences) != 1 || sameDeplpoy.OwnerReferences[0].Kind != v1beta1.ResourceTrackerKind {
-				return fmt.Errorf("same ns deploy have error ownerReference")
-			}
 			err = k8sClient.List(ctx, cross, crossOpts...)
 			if err != nil || len(cross.Items) != 0 {
 				return fmt.Errorf("error : cross namespace workload still exist")
@@ -734,11 +701,11 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       componentName,
 						Type:       "cross-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
 					},
 				},
 			},
@@ -780,14 +747,11 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err := k8sClient.Get(ctx, generateResourceTrackerKey(app.Namespace, app.Name, 1), resourceTracker); err != nil {
 				return err
 			}
-			if len(workload.OwnerReferences) != 1 || workload.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("wrokload ownerreference error")
-			}
 			if workload.Spec.Template.Spec.Containers[0].Image != "busybox" {
 				return fmt.Errorf("container image not match")
 			}
-			if len(resourceTracker.Status.TrackedResources) != 1 {
-				return fmt.Errorf("expect track %q resources, but got %q", 1, len(resourceTracker.Status.TrackedResources))
+			if len(resourceTracker.Spec.ManagedResources) != 1 {
+				return fmt.Errorf("expect track %q resources, but got %q", 1, len(resourceTracker.Spec.ManagedResources))
 			}
 			return nil
 		}, time.Second*50, time.Millisecond*300).Should(BeNil())
@@ -799,7 +763,7 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil {
 				return err
 			}
-			checkApp.Spec.Components[0].Properties = runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"nginx"}`)}
+			checkApp.Spec.Components[0].Properties = &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"nginx"}`)}
 			err = k8sClient.Update(ctx, checkApp)
 			if err != nil {
 				return err
@@ -811,8 +775,8 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err := k8sClient.Get(ctx, generateResourceTrackerKey(app.Namespace, app.Name, 2), resourceTracker); err != nil {
 				return err
 			}
-			if len(resourceTracker.Status.TrackedResources) != 1 {
-				return fmt.Errorf("expect track %q resources, but got %q", 1, len(resourceTracker.Status.TrackedResources))
+			if len(resourceTracker.Spec.ManagedResources) != 1 {
+				return fmt.Errorf("expect track %q resources, but got %q", 1, len(resourceTracker.Spec.ManagedResources))
 			}
 			depolys := new(appsv1.DeploymentList)
 			opts := []client.ListOption{
@@ -826,9 +790,6 @@ var _ = Describe("Test application cross namespace resource", func() {
 				return fmt.Errorf("error workload number %v", err)
 			}
 			workload = depolys.Items[0]
-			if len(workload.OwnerReferences) != 1 || workload.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("wrokload ownerreference error")
-			}
 			if workload.Spec.Template.Spec.Containers[0].Image != "nginx" {
 				return fmt.Errorf("container image not match")
 			}
@@ -878,16 +839,16 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       component1Name,
 						Type:       "cross-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
 					},
 					{
 						Name:       component2Name,
 						Type:       "cross-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
 					},
 				},
 			},
@@ -924,24 +885,18 @@ var _ = Describe("Test application cross namespace resource", func() {
 				return fmt.Errorf("failed get workloads")
 			}
 			deploy1 := workloads.Items[0]
-			if len(deploy1.OwnerReferences) != 1 || deploy1.OwnerReferences[0].Kind != v1beta1.ResourceTrackerKind {
-				return fmt.Errorf("deploy1 have error ownerReference")
-			}
 			deploy2 := workloads.Items[1]
-			if len(deploy2.OwnerReferences) != 1 || deploy2.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("deploy2 have error ownerReference")
+			if len(resourceTracker.Spec.ManagedResources) != 2 {
+				return fmt.Errorf("expect track %q resources, but got %q", 2, len(resourceTracker.Spec.ManagedResources))
 			}
-			if len(resourceTracker.Status.TrackedResources) != 2 {
-				return fmt.Errorf("expect track %q resources, but got %q", 2, len(resourceTracker.Status.TrackedResources))
-			}
-			if resourceTracker.Status.TrackedResources[0].Namespace != crossNamespace || resourceTracker.Status.TrackedResources[1].Namespace != crossNamespace {
+			if resourceTracker.Spec.ManagedResources[0].Namespace != crossNamespace || resourceTracker.Spec.ManagedResources[1].Namespace != crossNamespace {
 				return fmt.Errorf("resourceTracker recorde namespace mismatch")
 			}
-			if resourceTracker.Status.TrackedResources[0].Name != deploy1.Name && resourceTracker.Status.TrackedResources[1].Name != deploy1.Name {
-				return fmt.Errorf("resourceTracker status recode trackedResource name mismatch recorded %s, actually %s", resourceTracker.Status.TrackedResources[0].Name, deploy1.Name)
+			if resourceTracker.Spec.ManagedResources[0].Name != deploy1.Name && resourceTracker.Spec.ManagedResources[1].Name != deploy1.Name {
+				return fmt.Errorf("resourceTracker status recode trackedResource name mismatch recorded %s, actually %s", resourceTracker.Spec.ManagedResources[0].Name, deploy1.Name)
 			}
-			if resourceTracker.Status.TrackedResources[0].Name != deploy2.Name && resourceTracker.Status.TrackedResources[1].Name != deploy2.Name {
-				return fmt.Errorf("resourceTracker status recode trackedResource name mismatch recorded %s, actually %s", resourceTracker.Status.TrackedResources[0].Name, deploy2.Name)
+			if resourceTracker.Spec.ManagedResources[0].Name != deploy2.Name && resourceTracker.Spec.ManagedResources[1].Name != deploy2.Name {
+				return fmt.Errorf("resourceTracker status recode trackedResource name mismatch recorded %s, actually %s", resourceTracker.Spec.ManagedResources[0].Name, deploy2.Name)
 			}
 			return nil
 		}, time.Second*5, time.Millisecond*300).Should(BeNil())
@@ -975,17 +930,13 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil || len(workloads.Items) != 1 {
 				return fmt.Errorf("failed get cross namespace workload")
 			}
-			deploy := workloads.Items[0]
-			if len(deploy.OwnerReferences) != 1 || deploy.OwnerReferences[0].Kind != v1beta1.ResourceTrackerKind {
-				return fmt.Errorf("same ns deploy have error ownerReference")
-			}
 			checkRt := new(v1beta1.ResourceTracker)
 			err = k8sClient.Get(ctx, generateResourceTrackerKey(app.Namespace, app.Name, 2), checkRt)
 			if err != nil {
 				return fmt.Errorf("error get resourceTracker")
 			}
-			if len(checkRt.Status.TrackedResources) != 1 {
-				return fmt.Errorf("expect track %q resources, but got %q", 1, len(checkRt.Status.TrackedResources))
+			if len(checkRt.Spec.ManagedResources) != 1 {
+				return fmt.Errorf("expect track %q resources, but got %q", 1, len(checkRt.Spec.ManagedResources))
 			}
 			return nil
 		}, time.Second*5, time.Millisecond*500).Should(BeNil())
@@ -1032,15 +983,15 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       componentName,
 						Type:       "cross-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
-						Traits: []v1beta1.ApplicationTrait{
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Traits: []common.ApplicationTrait{
 							{
 								Type:       "cross-scaler",
-								Properties: runtime.RawExtension{Raw: []byte(`{"replicas": 0}`)},
+								Properties: &runtime.RawExtension{Raw: []byte(`{"replicas": 0}`)},
 							},
 						},
 					},
@@ -1076,23 +1027,17 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil || len(mts.Items) != 1 {
 				return fmt.Errorf("failed generate cross namespace trait")
 			}
-			if len(resourceTracker.Status.TrackedResources) != 2 {
-				return fmt.Errorf("expect track %q resources, but got %q", 2, len(resourceTracker.Status.TrackedResources))
+			if len(resourceTracker.Spec.ManagedResources) != 2 {
+				return fmt.Errorf("expect track %q resources, but got %q", 2, len(resourceTracker.Spec.ManagedResources))
 			}
 			trait := mts.Items[0]
-			if len(trait.OwnerReferences) != 1 || trait.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("trait owner reference missmatch")
-			}
 			deploys := new(appsv1.DeploymentList)
 			err = k8sClient.List(ctx, deploys, opts...)
 			if err != nil || len(deploys.Items) != 1 {
 				return fmt.Errorf("error to list deploy")
 			}
 			deploy := deploys.Items[0]
-			if deploy.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("deploy owner reference missmatch")
-			}
-			for _, resource := range resourceTracker.Status.TrackedResources {
+			for _, resource := range resourceTracker.Spec.ManagedResources {
 				if resource.Kind == deploy.Kind && resource.Name != deploy.Name {
 					return fmt.Errorf("deploy name mismatch ")
 				}
@@ -1107,7 +1052,7 @@ var _ = Describe("Test application cross namespace resource", func() {
 		Eventually(func() error {
 			app = new(v1beta1.Application)
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: appName}, app)).Should(BeNil())
-			app.Spec.Components[0].Traits = []v1beta1.ApplicationTrait{}
+			app.Spec.Components[0].Traits = []common.ApplicationTrait{}
 			return k8sClient.Update(ctx, app)
 		}, time.Second*5, time.Millisecond*300).Should(BeNil())
 
@@ -1134,8 +1079,8 @@ var _ = Describe("Test application cross namespace resource", func() {
 			if err != nil || len(mts.Items) != 0 {
 				return fmt.Errorf("cross namespace trait still exist")
 			}
-			if len(resourceTracker.Status.TrackedResources) != 1 {
-				return fmt.Errorf("expect track %d resources, but got %d", 1, len(resourceTracker.Status.TrackedResources))
+			if len(resourceTracker.Spec.ManagedResources) != 1 {
+				return fmt.Errorf("expect track %d resources, but got %d", 1, len(resourceTracker.Spec.ManagedResources))
 			}
 			deploys := new(appsv1.DeploymentList)
 			err = k8sClient.List(ctx, deploys, opts...)
@@ -1143,14 +1088,11 @@ var _ = Describe("Test application cross namespace resource", func() {
 				return fmt.Errorf("error to list deploy")
 			}
 			deploy := deploys.Items[0]
-			if len(deploy.OwnerReferences) != 1 || deploy.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("deploy owner reference missmatch")
-			}
-			if resourceTracker.Status.TrackedResources[0].Name != deploy.Name {
+			if resourceTracker.Spec.ManagedResources[0].Name != deploy.Name {
 				return fmt.Errorf("error to record deploy name in app status")
 			}
 			return nil
-		}, time.Second*5, time.Millisecond*500).Should(BeNil())
+		}, time.Second*30, time.Millisecond*500).Should(BeNil())
 		By("deleting application will remove resourceTracker and related resourceTracker will be removed")
 		app = new(v1beta1.Application)
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: appName}, app)).Should(BeNil())
@@ -1190,11 +1132,11 @@ var _ = Describe("Test application cross namespace resource", func() {
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name:       componentName,
 						Type:       "cross-worker",
-						Properties: runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
+						Properties: &runtime.RawExtension{Raw: []byte(`{"cmd":["sleep","1000"],"image":"busybox"}`)},
 					},
 				},
 			},
@@ -1237,14 +1179,11 @@ var _ = Describe("Test application cross namespace resource", func() {
 				return fmt.Errorf("error workload number %v", err)
 			}
 			workload = depolys.Items[0]
-			if len(workload.OwnerReferences) != 1 || workload.OwnerReferences[0].UID != resourceTracker.UID {
-				return fmt.Errorf("wrokload ownerreference error")
-			}
-			if len(checkRt.Status.TrackedResources) != 1 {
+			if len(checkRt.Spec.ManagedResources) != 1 {
 				return fmt.Errorf("resourceTracker status recode trackedResource length missmatch")
 			}
-			if checkRt.Status.TrackedResources[0].Name != workload.Name {
-				return fmt.Errorf("resourceTracker status recode trackedResource name mismatch recorded %s, actually %s", checkRt.Status.TrackedResources[0].Name, workload.Name)
+			if checkRt.Spec.ManagedResources[0].Name != workload.Name {
+				return fmt.Errorf("resourceTracker status recode trackedResource name mismatch recorded %s, actually %s", checkRt.Spec.ManagedResources[0].Name, workload.Name)
 			}
 			return nil
 		}, time.Second*5, time.Millisecond*500).Should(BeNil())

@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"reflect"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/conversion"
 
+	"github.com/oam-dev/kubevela/apis/core.oam.dev/common"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
 )
 
@@ -39,11 +41,11 @@ func ApplicationV1alpha2ToV1beta1(v1a2 *Application, v1b1 *v1beta1.Application) 
 	for _, comp := range v1a2.Spec.Components {
 
 		// convert trait, especially for `.name` -> `.type`
-		var traits = make([]v1beta1.ApplicationTrait, len(comp.Traits))
+		var traits = make([]common.ApplicationTrait, len(comp.Traits))
 		for j, trait := range comp.Traits {
-			traits[j] = v1beta1.ApplicationTrait{
+			traits[j] = common.ApplicationTrait{
 				Type:       trait.Name,
-				Properties: *trait.Properties.DeepCopy(),
+				Properties: trait.Properties.DeepCopy(),
 			}
 		}
 
@@ -54,16 +56,14 @@ func ApplicationV1alpha2ToV1beta1(v1a2 *Application, v1b1 *v1beta1.Application) 
 		}
 		// convert component
 		// `.settings` -> `.properties`
-		v1b1.Spec.Components = append(v1b1.Spec.Components, v1beta1.ApplicationComponent{
+		v1b1.Spec.Components = append(v1b1.Spec.Components, common.ApplicationComponent{
 			Name:       comp.Name,
 			Type:       comp.WorkloadType,
-			Properties: *comp.Settings.DeepCopy(),
+			Properties: comp.Settings.DeepCopy(),
 			Traits:     traits,
 			Scopes:     scopes,
 		})
 	}
-	// 3.2) convert Spec.RolloutPlan
-	v1b1.Spec.RolloutPlan = v1a2.Spec.RolloutPlan.DeepCopy()
 
 	// 4) convert Status common.AppStatus
 	v1b1.Status = *v1a2.Status.DeepCopy()
@@ -103,7 +103,7 @@ func (app *Application) ConvertFrom(src conversion.Hub) error {
 			for j, trait := range comp.Traits {
 				traits[j] = ApplicationTrait{
 					Name:       trait.Type,
-					Properties: *trait.Properties.DeepCopy(),
+					Properties: trait.Properties.DeepCopy(),
 				}
 			}
 
@@ -114,16 +114,21 @@ func (app *Application) ConvertFrom(src conversion.Hub) error {
 			}
 			// convert component
 			//  `.properties` -> `.settings`
+
+			var compProperties runtime.RawExtension
+
+			if comp.Properties != nil {
+				compProperties = *comp.Properties.DeepCopy()
+			}
+
 			app.Spec.Components = append(app.Spec.Components, ApplicationComponent{
 				Name:         comp.Name,
 				WorkloadType: comp.Type,
-				Settings:     *comp.Properties.DeepCopy(),
+				Settings:     compProperties,
 				Traits:       traits,
 				Scopes:       scopes,
 			})
 		}
-		// 3.2) convert Spec.RolloutPlan
-		app.Spec.RolloutPlan = sourceApp.Spec.RolloutPlan.DeepCopy()
 
 		// 4) convert Status common.AppStatus
 		app.Status = *sourceApp.Status.DeepCopy()

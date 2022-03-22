@@ -46,10 +46,73 @@ These guidelines help you write good commit messages and descriptions for your p
 
 ### Commit message format
 
-KubeVela uses the guidelines for commit messages outlined in [How to Write a Git Commit Message](https://chris.beams.io/posts/git-commit/), with the following additions:
+KubeVela follows the [conventional-commits](https://www.conventionalcommits.org/en/v1.0.0/) and [commit messages best practices](https://chris.beams.io/posts/git-commit/) to improve better history information.
 
-- Subject line must begin with the _area_ of the commit.
-- A footer in the form of an optional [keyword and issue reference](https://help.github.com/en/articles/closing-issues-using-keywords).
+The commit message should be structured as follows:
+
+```
+<type>[optional scope]: <subject>
+
+[optional body]
+```
+
+#### Examples:
+
+Commit message with scope:
+
+```
+Feat(lang): add polish language
+```
+
+Commit message with no body:
+
+```
+Docs: correct spelling of CHANGELOG
+```
+
+Commit message with multi-paragraph body:
+
+```
+Fix: correct minor typos in code
+
+see the issue for details
+
+on typos fixed.
+
+Reviewed-by: Z
+Refs #133
+```
+
+#### `<type>` (required)
+
+Type is required to better capture the area of the commit, based on the [Angular convention](https://github.com/angular/angular/blob/22b96b9/CONTRIBUTING.md#-commit-message-guidelines).
+
+We capitalize the `<type>` to make sure the subject line is capitalized. `<type>` can be one of the following:
+
+* **Feat**: A new feature
+* **Fix**: A bug fix
+* **Docs**: Documentation only changes
+* **Build**: Changes that affect the build system or external dependencies 
+* **Style**: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)
+* **Refactor**: A code change that neither fixes a bug nor adds a feature
+* **Perf**: A code change that improves performance
+* **Test**: Adding missing or correcting existing tests
+* **Chore**: Changes to the build process or auxiliary tools and libraries such as documentation generation
+
+#### `<scope>` (optional)
+
+Scope is optional, it may be provided to a commit’s type, to provide additional contextual information and is contained within parenthesis, it is could be anything specifying place of the commit change. Github issue link is
+also a valid scope. For example: Fix(cli), Feat(api), Fix(#233), etc.
+
+You can use `*` when the change affects more than a single scope.
+
+#### `<subject>` (required)
+
+The subject MUST immediately follow the colon and space after the type/scope prefix. The description is a short summary of the code changes, e.g., "Fix: array parsing issue when multiple spaces were contained in string", instead of "Fix: bug".
+
+#### `<body>` (optional)
+
+A longer commit body may be provided after the short subject, providing additional contextual information about the code changes. The body MUST begin one blank line after the description.
 
 #### Area
 
@@ -78,7 +141,7 @@ We still encourage contributors to write informative commit messages, as they be
 
 We use the pull request title when we generate change logs for releases. As such, we strive to make the title as informative as possible.
 
-Make sure that the title for your pull request uses the same format as the subject line in the commit message.
+Make sure that the title for your pull request uses the same format as the subject line in the commit message. If the format is not followed, we will add a label `title-needs-formatting` on the pull request.
 
 ### Pass all the CI checks
 

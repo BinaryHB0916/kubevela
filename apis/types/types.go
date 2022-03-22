@@ -16,9 +16,9 @@ limitations under the License.
 
 package types
 
+import "github.com/oam-dev/kubevela/pkg/oam"
+
 const (
-	// DefaultKubeVelaNS defines the default KubeVela namespace in Kubernetes
-	DefaultKubeVelaNS = "vela-system"
 	// DefaultKubeVelaReleaseName defines the default name of KubeVela Release
 	DefaultKubeVelaReleaseName = "kubevela"
 	// DefaultKubeVelaChartName defines the default chart name of KubeVela, this variable MUST align to the chart name of this repo
@@ -31,11 +31,36 @@ const (
 	DefaultAppNamespace = "default"
 	// AutoDetectWorkloadDefinition defines the default workload type for ComponentDefinition which doesn't specify a workload
 	AutoDetectWorkloadDefinition = "autodetects.core.oam.dev"
+	// KubeVelaControllerDeployment defines the KubeVela controller's deployment name
+	KubeVelaControllerDeployment = "kubevela-vela-core"
 )
 
+// DefaultKubeVelaNS defines the default KubeVela namespace in Kubernetes
+var DefaultKubeVelaNS = "vela-system"
+
 const (
-	// AnnDescription is the annotation which describe what is the capability used for in a WorkloadDefinition/TraitDefinition Object
-	AnnDescription = "definition.oam.dev/description"
+	// AnnoDefinitionDescription is the annotation which describe what is the capability used for in a WorkloadDefinition/TraitDefinition Object
+	AnnoDefinitionDescription = "definition.oam.dev/description"
+	// AnnoDefinitionIcon is the annotation which describe the icon url
+	AnnoDefinitionIcon = "definition.oam.dev/icon"
+	// AnnoDefinitionAppliedWorkloads is the annotation which describe what is the workloads used for in a TraitDefinition Object
+	AnnoDefinitionAppliedWorkloads = "definition.oam.dev/appliedWorkloads"
+	// LabelDefinition is the label for definition
+	LabelDefinition = "definition.oam.dev"
+	// LabelDefinitionName is the label for definition name
+	LabelDefinitionName = "definition.oam.dev/name"
+	// LabelDefinitionDeprecated is the label which describe whether the capability is deprecated
+	LabelDefinitionDeprecated = "custom.definition.oam.dev/deprecated"
+	// LabelDefinitionHidden is the label which describe whether the capability is hidden by UI
+	LabelDefinitionHidden = "custom.definition.oam.dev/ui-hidden"
+	// LabelNodeRoleGateway gateway role of node
+	LabelNodeRoleGateway = "node-role.kubernetes.io/gateway"
+	// LabelNodeRoleWorker worker role of node
+	LabelNodeRoleWorker = "node-role.kubernetes.io/worker"
+	// AnnoIngressControllerHTTPSPort define ingress controller listen port for https
+	AnnoIngressControllerHTTPSPort = "ingress.controller/https-port"
+	// AnnoIngressControllerHTTPPort define ingress controller listen port for http
+	AnnoIngressControllerHTTPPort = "ingress.controller/http-port"
 )
 
 const (
@@ -45,27 +70,51 @@ const (
 	StatusStaging = "Staging"
 )
 
-// EnvMeta stores the info for app environment
+// Config contains key/value pairs
+type Config map[string]string
+
+// EnvMeta stores the namespace for app environment
 type EnvMeta struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
-	Email     string `json:"email,omitempty"`
-	Domain    string `json:"domain,omitempty"`
-
-	Current string `json:"current,omitempty"`
+	Current   string `json:"current"`
 }
 
 const (
 	// TagCommandType used for tag cli category
 	TagCommandType = "commandType"
+
+	// TagCommandOrder defines the order
+	TagCommandOrder = "commandOrder"
+
 	// TypeStart defines one category
 	TypeStart = "Getting Started"
+
 	// TypeApp defines one category
 	TypeApp = "Managing Applications"
-	// TypeCap defines one category
-	TypeCap = "Managing Capabilities"
+
+	// TypeCD defines workflow Management operations
+	TypeCD = "Continuous Delivery"
+
+	// TypeExtension defines one category
+	TypeExtension = "Managing Extension"
+
 	// TypeSystem defines one category
-	TypeSystem = "System"
+	TypeSystem = "Others"
+
 	// TypePlugin defines one category used in Kubectl Plugin
 	TypePlugin = "Plugin Command"
 )
+
+// LabelArg is the argument `label` of a definition
+const LabelArg = "label"
+
+// DefaultFilterAnnots are annotations that won't pass to workload or trait
+var DefaultFilterAnnots = []string{
+	oam.AnnotationAppRollout,
+	oam.AnnotationRollingComponent,
+	oam.AnnotationInplaceUpgrade,
+	oam.AnnotationFilterLabelKeys,
+	oam.AnnotationFilterAnnotationKeys,
+	oam.AnnotationLastAppliedConfiguration,
+}

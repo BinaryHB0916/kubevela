@@ -18,8 +18,7 @@ package plugin
 
 import (
 	"fmt"
-	"io/ioutil"
-	"os/exec"
+	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -51,16 +50,16 @@ var _ = Describe("Test Kubectl Plugin", func() {
 			}, 5*time.Second).Should(BeNil())
 
 			By("dry-run application")
-			err := ioutil.WriteFile("dry-run-app.yaml", []byte(application), 0644)
+			err := os.WriteFile("dry-run-app.yaml", []byte(application), 0644)
 			Expect(err).NotTo(HaveOccurred())
 			output, err := e2e.Exec("kubectl-vela dry-run -f dry-run-app.yaml -n vela-system")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(Equal(dryRunResult))
+			Expect(output).Should(ContainSubstring(dryRunResult))
 		})
 
 		It("Test dry-run application use definitions in local", func() {
 			output, err := e2e.Exec("kubectl-vela dry-run -f dry-run-app.yaml -d definitions")
-			Expect(output).Should(Equal(dryRunResult))
+			Expect(output).Should(ContainSubstring(dryRunResult))
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -90,43 +89,56 @@ var _ = Describe("Test Kubectl Plugin", func() {
 				return err
 			}, 5*time.Second).Should(BeNil())
 
+			Eventually(func() bool {
+				var tempApp v1beta1.Application
+				_ = k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: app.Name}, &tempApp)
+				return tempApp.Status.LatestRevision != nil
+			}, 20*time.Second).Should(BeTrue())
+
 			By("live-diff application")
-			err := ioutil.WriteFile("live-diff-app.yaml", []byte(newApplication), 0644)
+			err := os.WriteFile("live-diff-app.yaml", []byte(newApplication), 0644)
 			Expect(err).NotTo(HaveOccurred())
 			output, err := e2e.Exec("kubectl-vela live-diff -f live-diff-app.yaml")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(Equal(livediffResult))
+			Expect(output).Should(ContainSubstring(livediffResult))
 		})
 
 		It("Test dry-run application use definitions in local", func() {
+			Eventually(func() bool {
+				var tempApp v1beta1.Application
+				_ = k8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: app.Name}, &tempApp)
+				return tempApp.Status.LatestRevision != nil
+			}, 20*time.Second).Should(BeTrue())
+
 			output, err := e2e.Exec("kubectl-vela live-diff -f live-diff-app.yaml -d definitions")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(Equal(livediffResult))
+			Expect(output).Should(ContainSubstring(livediffResult))
 		})
 	})
 
 	Context("Test kubectl vela show", func() {
 		It("Test show componentDefinition reference", func() {
 			cdName := "test-show-task"
-			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s", cdName))
+			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s -n default", cdName))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(Equal(showCdResult))
+			Expect(output).Should(ContainSubstring(showCdResult))
 		})
 		It("Test show traitDefinition reference", func() {
 			tdName := "test-sidecar"
-			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s", tdName))
+			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s -n default", tdName))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(Equal(showTdResult))
+			Expect(output).Should(ContainSubstring(showTdResult))
 		})
 		It("Test show componentDefinition use Helm Charts as Workload", func() {
-			cdName := "test-webapp-chart"
-			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s", cdName))
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("Properties"))
+			Eventually(func() string {
+				cdName := "test-webapp-chart"
+				output, _ := e2e.Exec(fmt.Sprintf("kubectl-vela show %s -n default", cdName))
+				return output
+			}, 20*time.Second).Should(ContainSubstring("Properties"))
 		})
 		It("Test show componentDefinition def with raw Kube mode", func() {
 			cdName := "kube-worker"
-			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s", cdName))
+			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s -n default", cdName))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).Should(ContainSubstring("image"))
 			Expect(output).Should(ContainSubstring("The value will be applied to fields: [spec.template.spec.containers[0].image]."))
@@ -135,84 +147,29 @@ var _ = Describe("Test Kubectl Plugin", func() {
 		})
 		It("Test show traitDefinition def with raw Kube mode", func() {
 			tdName := "service-kube"
-			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s", tdName))
+			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s -n default", tdName))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).Should(ContainSubstring("targetPort"))
 			Expect(output).Should(ContainSubstring("target port num for service provider."))
 		})
 		It("Test show traitDefinition def with cue single map parameter", func() {
 			tdName := "annotations"
-			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s", tdName))
+			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s -n default", tdName))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("map[string]string"))
+			Expect(output).Should(ContainSubstring("map[string](null|string)"))
 		})
 		It("Test show webservice def with cue ignore annotation ", func() {
 			tdName := "webservice"
-			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s", tdName))
+			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s -n default", tdName))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).ShouldNot(ContainSubstring("addRevisionLabel"))
 		})
 		It("Test show webservice def with cue ignore annotation ", func() {
 			tdName := "mywebservice"
-			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s", tdName))
+			output, err := e2e.Exec(fmt.Sprintf("kubectl-vela show %s -n default", tdName))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).ShouldNot(ContainSubstring("addRevisionLabel"))
 			Expect(output).ShouldNot(ContainSubstring("mySecretKey"))
-		})
-	})
-
-	Context("Test kubectl vela comp discover", func() {
-		It("Test list components in local registry", func() {
-			output, err := e2e.Exec("kubectl-vela comp --discover --url=" + testRegistryPath)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("Showing components from registry"))
-			Expect(output).Should(ContainSubstring("cloneset"))
-		})
-	})
-	Context("Test kubectl vela trait discover", func() {
-		It("Test list traits in local registry", func() {
-			output, err := e2e.Exec("kubectl-vela trait --discover --url=" + testRegistryPath)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("Showing traits from registry"))
-			Expect(output).Should(ContainSubstring("init-container"))
-		})
-	})
-	Context("Test kubectl vela comp and trait install", func() {
-		It("Test install a sample component", func() {
-			output, err := e2e.Exec("kubectl-vela comp get cloneset --url=" + testRegistryPath)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("Successfully install component: cloneset"))
-		})
-		It("Test install a sample trait", func() {
-			output, err := e2e.Exec("kubectl-vela trait get init-container --url=" + testRegistryPath)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("Successfully install trait: init-container"))
-		})
-	})
-	Context("Test kubectl vela list installed comp and trait", func() {
-		It("Test list installed component", func() {
-			output, err := e2e.Exec("kubectl-vela comp --url=" + testRegistryPath)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("cloneset"))
-		})
-		It("Test list installed trait", func() {
-			output, err := e2e.Exec("kubectl-vela trait --url=" + testRegistryPath)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("init-container"))
-		})
-	})
-	Context("Test uninstall vela trait", func() {
-		It("Clean the sample component", func() {
-			cmd := exec.Command("kubectl", "delete", "componentDefinition", "cloneset", "-n", "vela-system")
-			output, err := cmd.Output()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("componentdefinition.core.oam.dev \"cloneset\" deleted"))
-		})
-		It("Clean the sample trait", func() {
-			cmd := exec.Command("kubectl", "delete", "traitDefinition", "init-container", "-n", "vela-system")
-			output, err := cmd.Output()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).Should(ContainSubstring("traitdefinition.core.oam.dev \"init-container\" deleted"))
 		})
 	})
 })
@@ -282,9 +239,6 @@ spec:
         	spec: {
         		selector: matchLabels: {
         			"app.oam.dev/component": context.name
-        			if parameter.addRevisionLabel {
-        				"app.oam.dev/appRevision": context.appRevision
-        			}
         		}
         
         		template: {
@@ -462,7 +416,7 @@ spec:
             chart: "podinfo"
             version: "5.1.4"
       repository:
-        url: "http://oam.dev/catalog/"
+        url: "https://charts.kubevela.net/example/"
 `
 
 var componentDefWithKube = `
@@ -639,9 +593,6 @@ spec:
        	spec: {
        		selector: matchLabels: {
        			"app.oam.dev/component": context.name
-       			if parameter.addRevisionLabel {
-       				"app.oam.dev/appRevision": context.appRevision
-       			}
        		}
 
        		template: {
@@ -696,17 +647,22 @@ spec:
 `
 
 var dryRunResult = `---
-# Application(test-vela-app) -- Comopnent(express-server) 
+# Application(test-vela-app) -- Component(express-server) 
 ---
 
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  annotations: {}
   labels:
     app.oam.dev/appRevision: ""
     app.oam.dev/component: express-server
     app.oam.dev/name: test-vela-app
+    app.oam.dev/namespace: default
+    app.oam.dev/resourceType: WORKLOAD
     workload.oam.dev/type: test-webservice
+  name: express-server
+  namespace: default
 spec:
   selector:
     matchLabels:
@@ -726,13 +682,17 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  annotations: {}
   labels:
     app.oam.dev/appRevision: ""
     app.oam.dev/component: express-server
     app.oam.dev/name: test-vela-app
+    app.oam.dev/namespace: default
+    app.oam.dev/resourceType: TRAIT
     trait.oam.dev/resource: service
     trait.oam.dev/type: test-ingress
   name: express-server
+  namespace: default
 spec:
   ports:
   - port: 80
@@ -744,13 +704,17 @@ spec:
 apiVersion: networking.k8s.io/v1beta1
 kind: Ingress
 metadata:
+  annotations: {}
   labels:
     app.oam.dev/appRevision: ""
     app.oam.dev/component: express-server
     app.oam.dev/name: test-vela-app
+    app.oam.dev/namespace: default
+    app.oam.dev/resourceType: TRAIT
     trait.oam.dev/resource: ingress
     trait.oam.dev/type: test-ingress
   name: express-server
+  namespace: default
 spec:
   rules:
   - host: testsvc.example.com
@@ -762,8 +726,6 @@ spec:
         path: /
 
 ---
-
-
 `
 
 var livediffResult = `---
@@ -773,6 +735,8 @@ var livediffResult = `---
   kind: Application
   metadata:
     creationTimestamp: null
+-   finalizers:
+-   - app.oam.dev/resource-tracker-finalizer
     name: test-vela-app
     namespace: default
   spec:
@@ -793,14 +757,7 @@ var livediffResult = `---
 +           /: 8080
         type: test-ingress
       type: test-webservice
-  status:
-    rollout:
-      batchRollingState: ""
-      currentBatch: 0
-      lastTargetAppRevision: ""
-      rollingState: ""
-      upgradedReadyReplicas: 0
-      upgradedReplicas: 0
+  status: {}
   
 ---
 ## Component (express-server) has been removed(-)
@@ -808,11 +765,16 @@ var livediffResult = `---
 - apiVersion: apps/v1
 - kind: Deployment
 - metadata:
+-   annotations: {}
 -   labels:
 -     app.oam.dev/appRevision: ""
 -     app.oam.dev/component: express-server
 -     app.oam.dev/name: test-vela-app
+-     app.oam.dev/namespace: default
+-     app.oam.dev/resourceType: WORKLOAD
 -     workload.oam.dev/type: test-webservice
+-   name: express-server
+-   namespace: default
 - spec:
 -   selector:
 -     matchLabels:
@@ -834,13 +796,17 @@ var livediffResult = `---
 - apiVersion: v1
 - kind: Service
 - metadata:
+-   annotations: {}
 -   labels:
 -     app.oam.dev/appRevision: ""
 -     app.oam.dev/component: express-server
 -     app.oam.dev/name: test-vela-app
+-     app.oam.dev/namespace: default
+-     app.oam.dev/resourceType: TRAIT
 -     trait.oam.dev/resource: service
 -     trait.oam.dev/type: test-ingress
 -   name: express-server
+-   namespace: default
 - spec:
 -   ports:
 -   - port: 80
@@ -854,13 +820,17 @@ var livediffResult = `---
 - apiVersion: networking.k8s.io/v1beta1
 - kind: Ingress
 - metadata:
+-   annotations: {}
 -   labels:
 -     app.oam.dev/appRevision: ""
 -     app.oam.dev/component: express-server
 -     app.oam.dev/name: test-vela-app
+-     app.oam.dev/namespace: default
+-     app.oam.dev/resourceType: TRAIT
 -     trait.oam.dev/resource: ingress
 -     trait.oam.dev/type: test-ingress
 -   name: express-server
+-   namespace: default
 - spec:
 -   rules:
 -   - host: testsvc.example.com
@@ -877,11 +847,16 @@ var livediffResult = `---
 + apiVersion: apps/v1
 + kind: Deployment
 + metadata:
++   annotations: {}
 +   labels:
 +     app.oam.dev/appRevision: ""
 +     app.oam.dev/component: new-express-server
 +     app.oam.dev/name: test-vela-app
++     app.oam.dev/namespace: default
++     app.oam.dev/resourceType: WORKLOAD
 +     workload.oam.dev/type: test-webservice
++   name: new-express-server
++   namespace: default
 + spec:
 +   selector:
 +     matchLabels:
@@ -908,13 +883,17 @@ var livediffResult = `---
 + apiVersion: v1
 + kind: Service
 + metadata:
++   annotations: {}
 +   labels:
 +     app.oam.dev/appRevision: ""
 +     app.oam.dev/component: new-express-server
 +     app.oam.dev/name: test-vela-app
++     app.oam.dev/namespace: default
++     app.oam.dev/resourceType: TRAIT
 +     trait.oam.dev/resource: service
 +     trait.oam.dev/type: test-ingress
 +   name: new-express-server
++   namespace: default
 + spec:
 +   ports:
 +   - port: 8080
@@ -928,13 +907,17 @@ var livediffResult = `---
 + apiVersion: networking.k8s.io/v1beta1
 + kind: Ingress
 + metadata:
++   annotations: {}
 +   labels:
 +     app.oam.dev/appRevision: ""
 +     app.oam.dev/component: new-express-server
 +     app.oam.dev/name: test-vela-app
++     app.oam.dev/namespace: default
++     app.oam.dev/resourceType: TRAIT
 +     trait.oam.dev/resource: ingress
 +     trait.oam.dev/type: test-ingress
 +   name: new-express-server
++   namespace: default
 + spec:
 +   rules:
 +   - host: new-testsvc.example.com
@@ -944,8 +927,6 @@ var livediffResult = `---
 +           serviceName: new-express-server
 +           servicePort: 8080
 +         path: /
-  
-
 `
 
 var testShowComponentDef = `

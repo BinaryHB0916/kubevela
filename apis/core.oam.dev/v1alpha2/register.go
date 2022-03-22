@@ -85,22 +85,6 @@ var (
 	ApplicationConfigurationGroupVersionKind = SchemeGroupVersion.WithKind(ApplicationConfigurationKind)
 )
 
-// ApplicationContext type metadata.
-var (
-	ApplicationContextKind             = reflect.TypeOf(ApplicationContext{}).Name()
-	ApplicationContextGroupKind        = schema.GroupKind{Group: Group, Kind: ApplicationContextKind}.String()
-	ApplicationContextKindAPIVersion   = ApplicationContextKind + "." + SchemeGroupVersion.String()
-	ApplicationContextGroupVersionKind = SchemeGroupVersion.WithKind(ApplicationContextKind)
-)
-
-// ContainerizedWorkload type metadata.
-var (
-	ContainerizedWorkloadKind             = reflect.TypeOf(ContainerizedWorkload{}).Name()
-	ContainerizedWorkloadGroupKind        = schema.GroupKind{Group: Group, Kind: ContainerizedWorkloadKind}.String()
-	ContainerizedWorkloadKindAPIVersion   = ContainerizedWorkloadKind + "." + SchemeGroupVersion.String()
-	ContainerizedWorkloadGroupVersionKind = SchemeGroupVersion.WithKind(ContainerizedWorkloadKind)
-)
-
 // ManualScalerTrait type metadata.
 var (
 	ManualScalerTraitKind             = reflect.TypeOf(ManualScalerTrait{}).Name()
@@ -125,14 +109,6 @@ var (
 	ApplicationKindVersionKind = SchemeGroupVersion.WithKind(ApplicationKind)
 )
 
-// AppRollout type metadata.
-var (
-	AppRolloutKind            = reflect.TypeOf(AppRollout{}).Name()
-	AppRolloutGroupKind       = schema.GroupKind{Group: Group, Kind: AppRolloutKind}.String()
-	AppRolloutKindAPIVersion  = ApplicationKind + "." + SchemeGroupVersion.String()
-	AppRolloutKindVersionKind = SchemeGroupVersion.WithKind(AppRolloutKind)
-)
-
 // ApplicationRevision type metadata
 var (
 	ApplicationRevisionKind             = reflect.TypeOf(ApplicationRevision{}).Name()
@@ -148,11 +124,8 @@ func init() {
 	SchemeBuilder.Register(&ScopeDefinition{}, &ScopeDefinitionList{})
 	SchemeBuilder.Register(&Component{}, &ComponentList{})
 	SchemeBuilder.Register(&ApplicationConfiguration{}, &ApplicationConfigurationList{})
-	SchemeBuilder.Register(&ContainerizedWorkload{}, &ContainerizedWorkloadList{})
 	SchemeBuilder.Register(&ManualScalerTrait{}, &ManualScalerTraitList{})
 	SchemeBuilder.Register(&HealthScope{}, &HealthScopeList{})
 	SchemeBuilder.Register(&Application{}, &ApplicationList{})
-	SchemeBuilder.Register(&AppRollout{}, &AppRolloutList{})
 	SchemeBuilder.Register(&ApplicationRevision{}, &ApplicationRevisionList{})
-	SchemeBuilder.Register(&ApplicationContext{}, &ApplicationContextList{})
 }

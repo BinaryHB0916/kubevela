@@ -17,24 +17,13 @@ limitations under the License.
 package cli
 
 import (
-	"os"
 	"testing"
 
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/oam-dev/kubevela/apis/types"
-	common2 "github.com/oam-dev/kubevela/pkg/utils/common"
-	cmdutil "github.com/oam-dev/kubevela/pkg/utils/util"
 	"github.com/oam-dev/kubevela/references/common"
 )
-
-func TestNewTraitsCommandPersistentPreRunE(t *testing.T) {
-	io := cmdutil.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr}
-	fakeC := common2.Args{}
-	cmd := NewTraitsCommand(fakeC, io)
-	assert.Nil(t, cmd.PersistentPreRunE(new(cobra.Command), []string{}))
-}
 
 func TestTraitsAppliedToAllWorkloads(t *testing.T) {
 	trait := types.Capability{

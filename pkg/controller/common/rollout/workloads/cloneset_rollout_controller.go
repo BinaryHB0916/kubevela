@@ -28,8 +28,8 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
 	"github.com/oam-dev/kubevela/apis/standard.oam.dev/v1alpha1"
+	"github.com/oam-dev/kubevela/pkg/controller/utils"
 	"github.com/oam-dev/kubevela/pkg/oam"
 )
 
@@ -84,7 +84,14 @@ func (c *CloneSetRolloutController) VerifySpec(ctx context.Context) (bool, error
 	}
 
 	// make sure that the updateRevision is different from what we have already done
-	targetHash := c.cloneSet.Status.UpdateRevision
+	targetHash, verifyErr := utils.ComputeSpecHash(c.cloneSet.Spec)
+	if verifyErr != nil {
+		// do not fail the rollout because we can't compute the hash value for some reason
+		c.rolloutStatus.RolloutRetry(verifyErr.Error())
+		// nolint:nilerr
+		return false, nil
+	}
+
 	if targetHash == c.rolloutStatus.LastAppliedPodTemplateIdentifier {
 		return false, fmt.Errorf("there is no difference between the source and target, hash = %s", targetHash)
 	}
@@ -128,15 +135,15 @@ func (c *CloneSetRolloutController) Initialize(ctx context.Context) (bool, error
 	}
 
 	if controller := metav1.GetControllerOf(c.cloneSet); controller != nil {
-		if controller.Kind == v1beta1.AppRolloutKind && controller.APIVersion == v1beta1.SchemeGroupVersion.String() {
+		if controller.Kind == v1alpha1.RolloutKind && controller.APIVersion == v1alpha1.SchemeGroupVersion.String() {
 			// it's already there
 			return true, nil
 		}
 	}
 	// add the parent controller to the owner of the cloneset
 	// before kicking start the update and start from every pod in the old version
-	clonePatch := client.MergeFrom(c.cloneSet.DeepCopyObject())
-	ref := metav1.NewControllerRef(c.parentController, v1beta1.AppRolloutKindVersionKind)
+	clonePatch := client.MergeFrom(c.cloneSet.DeepCopy())
+	ref := metav1.NewControllerRef(c.parentController, c.parentController.GetObjectKind().GroupVersionKind())
 	c.cloneSet.SetOwnerReferences(append(c.cloneSet.GetOwnerReferences(), *ref))
 	c.cloneSet.Spec.UpdateStrategy.Paused = false
 	c.cloneSet.Spec.UpdateStrategy.Partition = &intstr.IntOrString{Type: intstr.Int, IntVal: totalReplicas}
@@ -164,7 +171,7 @@ func (c *CloneSetRolloutController) RolloutOneBatchPods(ctx context.Context) (bo
 
 	newPodTarget := calculateNewBatchTarget(c.rolloutSpec, 0, int(cloneSetSize), int(c.rolloutStatus.CurrentBatch))
 	// set the Partition as the desired number of pods in old revisions.
-	clonePatch := client.MergeFrom(c.cloneSet.DeepCopyObject())
+	clonePatch := client.MergeFrom(c.cloneSet.DeepCopy())
 	c.cloneSet.Spec.UpdateStrategy.Partition = &intstr.IntOrString{Type: intstr.Int,
 		IntVal: cloneSetSize - int32(newPodTarget)}
 	// patch the Cloneset
@@ -259,12 +266,14 @@ func (c *CloneSetRolloutController) Finalize(ctx context.Context, succeed bool) 
 		c.rolloutStatus.RolloutRetry(err.Error())
 		return false
 	}
-	clonePatch := client.MergeFrom(c.cloneSet.DeepCopyObject())
+	clonePatch := client.MergeFrom(c.cloneSet.DeepCopy())
 	// remove the parent controller from the resources' owner list
 	var newOwnerList []metav1.OwnerReference
 	isOwner := false
 	for _, owner := range c.cloneSet.GetOwnerReferences() {
-		if owner.Kind == v1beta1.AppRolloutKind && owner.APIVersion == v1beta1.SchemeGroupVersion.String() {
+		if owner.Kind == c.parentController.GetObjectKind().GroupVersionKind().Kind &&
+			owner.APIVersion == c.parentController.GetObjectKind().GroupVersionKind().GroupVersion().String() &&
+			owner.Controller != nil && *owner.Controller {
 			isOwner = true
 			continue
 		}

@@ -28,12 +28,6 @@ import (
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/gexec"
-	k8sruntime "k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
-
-	oamcore "github.com/oam-dev/kubevela/apis/core.oam.dev"
 )
 
 var rudrPath = GetCliBinary()
@@ -86,6 +80,22 @@ func asyncExec(cli string) (*gexec.Session, error) {
 	return session, err
 }
 
+func LongTimeExecWithEnv(cli string, timeout time.Duration, env []string) (string, error) {
+	var output []byte
+	c := strings.Fields(cli)
+	commandName := path.Join(rudrPath, c[0])
+	command := exec.Command(commandName, c[1:]...)
+	command.Env = os.Environ()
+	command.Env = append(command.Env, env...)
+
+	session, err := gexec.Start(command, ginkgo.GinkgoWriter, ginkgo.GinkgoWriter)
+	if err != nil {
+		return string(output), err
+	}
+	s := session.Wait(timeout)
+	return string(s.Out.Contents()) + string(s.Err.Contents()), nil
+}
+
 // InteractiveExec executes a command with interactive input
 func InteractiveExec(cli string, consoleFn func(*expect.Console)) (string, error) {
 	var output []byte
@@ -106,33 +116,19 @@ func InteractiveExec(cli string, consoleFn func(*expect.Console)) (string, error
 	command.Stdin = console.Tty()
 
 	session, err := gexec.Start(command, console.Tty(), console.Tty())
+	if err != nil {
+		return string(output), err
+	}
 	s := session.Wait(300 * time.Second)
-	console.Tty().Close()
+	err = console.Tty().Close()
+	if err != nil {
+		return string(output), err
+	}
 	<-doneC
 	if err != nil {
 		return string(output), err
 	}
 	return string(s.Out.Contents()) + string(s.Err.Contents()), nil
-}
-
-func NewK8sClient() (client.Client, error) {
-	conf, err := config.GetConfig()
-	if err != nil {
-		return nil, err
-	}
-	scheme := k8sruntime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		return nil, err
-	}
-	if err := oamcore.AddToScheme(scheme); err != nil {
-		return nil, err
-	}
-
-	k8sclient, err := client.New(conf, client.Options{Scheme: scheme})
-	if err != nil {
-		return nil, err
-	}
-	return k8sclient, nil
 }
 
 func BeforeSuit() {

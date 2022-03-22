@@ -25,7 +25,6 @@ import (
 	"strings"
 	"time"
 
-	runtimev1alpha1 "github.com/crossplane/crossplane-runtime/apis/core/v1alpha1"
 	"github.com/crossplane/crossplane-runtime/pkg/fieldpath"
 	mapset "github.com/deckarep/golang-set"
 	"github.com/mitchellh/hashstructure/v2"
@@ -43,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	commontypes "github.com/oam-dev/kubevela/apis/core.oam.dev/common"
+	"github.com/oam-dev/kubevela/apis/core.oam.dev/condition"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1alpha2"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
 	"github.com/oam-dev/kubevela/pkg/controller/common"
@@ -65,8 +65,12 @@ const LabelPodSpecable = "workload.oam.dev/podspecable"
 
 // allBuiltinCapabilities includes all builtin controllers
 // TODO(zzxwill) needs to automatically discovery all controllers
-var allBuiltinCapabilities = mapset.NewSet(common.MetricsControllerName, common.PodspecWorkloadControllerName,
-	common.RouteControllerName, common.AutoscaleControllerName)
+var allBuiltinCapabilities = mapset.NewSet(
+	common.ManualScalerTraitControllerName,
+	common.RolloutControllerName,
+	common.HealthScopeControllerName,
+	common.EnvBindingControllerName,
+)
 
 // GetPodSpecPath get podSpec field and label
 func GetPodSpecPath(workloadDef *v1alpha2.WorkloadDefinition) (string, bool) {
@@ -256,7 +260,7 @@ func ComputeSpecHash(spec interface{}) (string, error) {
 // RefreshPackageDiscover help refresh package discover
 func RefreshPackageDiscover(ctx context.Context, k8sClient client.Client, dm discoverymapper.DiscoveryMapper,
 	pd *packages.PackageDiscover, definition runtime.Object) error {
-	var gvk schema.GroupVersionKind
+	var gvk metav1.GroupVersionKind
 	var err error
 	switch def := definition.(type) {
 	case *v1beta1.ComponentDefinition:
@@ -275,7 +279,11 @@ func RefreshPackageDiscover(ctx context.Context, k8sClient client.Client, dm dis
 			if err != nil {
 				return err
 			}
-			gvk = gv.WithKind(def.Spec.Workload.Definition.Kind)
+			gvk = metav1.GroupVersionKind{
+				Group:   gv.Group,
+				Version: gv.Version,
+				Kind:    def.Spec.Workload.Definition.Kind,
+			}
 		}
 	case *v1beta1.TraitDefinition:
 		gvk, err = util.GetGVKFromDefinition(dm, def.Spec.Reference)
@@ -308,56 +316,14 @@ func RefreshPackageDiscover(ctx context.Context, k8sClient client.Client, dm dis
 	}
 
 	// Test whether the refresh is successful
-	if exist := pd.Exist(targetGVK); !exist {
-		return fmt.Errorf("get CRD %s error", targetGVK.String())
-	}
+	// if exist := pd.Exist(targetGVK); !exist {
+	//	 return fmt.Errorf("get CRD %s error", targetGVK.String())
+	// }
 	return nil
 }
 
-// CheckAppDeploymentUsingAppRevision get all appDeployments using appRevisions related the app
-func CheckAppDeploymentUsingAppRevision(ctx context.Context, c client.Reader, appNs string, appName string) ([]string, error) {
-	deployOpts := []client.ListOption{
-		client.InNamespace(appNs),
-	}
-	var res []string
-	ads := new(v1beta1.AppDeploymentList)
-	if err := c.List(ctx, ads, deployOpts...); err != nil {
-		return nil, err
-	}
-	if len(ads.Items) == 0 {
-		return res, nil
-	}
-	relatedRevs := new(v1beta1.ApplicationRevisionList)
-	revOpts := []client.ListOption{
-		client.InNamespace(appNs),
-		client.MatchingLabels{oam.LabelAppName: appName},
-	}
-	if err := c.List(ctx, relatedRevs, revOpts...); err != nil {
-		return nil, err
-	}
-	if len(relatedRevs.Items) == 0 {
-		return res, nil
-	}
-	revName := map[string]bool{}
-	for _, rev := range relatedRevs.Items {
-		if len(rev.Name) != 0 {
-			revName[rev.Name] = true
-		}
-	}
-	for _, d := range ads.Items {
-		for _, dr := range d.Spec.AppRevisions {
-			if len(dr.RevisionName) != 0 {
-				if revName[dr.RevisionName] {
-					res = append(res, dr.RevisionName)
-				}
-			}
-		}
-	}
-	return res, nil
-}
-
 // GetUnstructuredObjectStatusCondition returns the status.condition with matching condType from an unstructured object.
-func GetUnstructuredObjectStatusCondition(obj *unstructured.Unstructured, condType string) (*runtimev1alpha1.Condition, bool, error) {
+func GetUnstructuredObjectStatusCondition(obj *unstructured.Unstructured, condType string) (*condition.Condition, bool, error) {
 	cs, found, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	if err != nil {
 		return nil, false, err
@@ -370,7 +336,7 @@ func GetUnstructuredObjectStatusCondition(obj *unstructured.Unstructured, condTy
 		if err != nil {
 			return nil, false, err
 		}
-		condObj := &runtimev1alpha1.Condition{}
+		condObj := &condition.Condition{}
 		err = json.Unmarshal(b, condObj)
 		if err != nil {
 			return nil, false, err

@@ -25,12 +25,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oam-dev/kubevela/apis/standard.oam.dev/v1alpha1"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
 	kruise "github.com/openkruise/kruise-api/apps/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	rbac "k8s.io/api/rbac/v1"
 	crdv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,17 +49,14 @@ import (
 	commontypes "github.com/oam-dev/kubevela/apis/core.oam.dev/common"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1alpha2"
 	"github.com/oam-dev/kubevela/pkg/oam/util"
-	"github.com/oam-dev/kubevela/pkg/utils/common"
 	// +kubebuilder:scaffold:imports
 )
 
 var k8sClient client.Client
 var scheme = runtime.NewScheme()
 var manualscalertrait v1alpha2.TraitDefinition
-var extendedmanualscalertrait v1alpha2.TraitDefinition
 var roleName = "oam-example-com"
 var roleBindingName = "oam-role-binding"
-var crd crdv1.CustomResourceDefinition
 
 // A DefinitionExtension is an Object type for xxxDefinitin.spec.extension
 type DefinitionExtension struct {
@@ -97,6 +94,8 @@ var _ = BeforeSuite(func(done Done) {
 	depSchemeBuilder.Register(depExample.DeepCopyObject())
 	err = depSchemeBuilder.AddToScheme(scheme)
 	Expect(err).Should(BeNil())
+	err = v1alpha1.AddToScheme(scheme)
+	Expect(err).Should(BeNil())
 	By("Setting up kubernetes client")
 	k8sClient, err = client.New(config.GetConfigOrDie(), client.Options{Scheme: scheme})
 	if err != nil {
@@ -120,6 +119,7 @@ var _ = BeforeSuite(func(done Done) {
 		},
 	}
 	// For some reason, traitDefinition is created as a Cluster scope object
+	Expect(k8sClient.Create(context.Background(), manualscalertrait.DeepCopy())).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
 	Expect(k8sClient.Create(context.Background(), &manualscalertrait)).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
 	// Create manual scaler trait definition with spec.extension field
 	definitionExtension := DefinitionExtension{
@@ -128,50 +128,7 @@ var _ = BeforeSuite(func(done Done) {
 	in := new(runtime.RawExtension)
 	in.Raw, _ = json.Marshal(definitionExtension)
 
-	extendedmanualscalertrait = v1alpha2.TraitDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "manualscalertraits-extended.core.oam.dev",
-			Namespace: "vela-system",
-			Labels:    map[string]string{"trait": "manualscalertrait"},
-		},
-		Spec: v1alpha2.TraitDefinitionSpec{
-			WorkloadRefPath: "spec.workloadRef",
-			Reference: commontypes.DefinitionReference{
-				Name: "manualscalertraits-extended.core.oam.dev",
-			},
-			Extension: in,
-		},
-	}
-	Expect(k8sClient.Create(context.Background(), &extendedmanualscalertrait)).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
 	By("Created extended manualscalertraits.core.oam.dev")
-
-	// For some reason, workloadDefinition is created as a Cluster scope object
-	label := map[string]string{"workload": "containerized-workload"}
-	// create workload definition for 'containerizedworkload'
-	wd := v1alpha2.WorkloadDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "containerizedworkloads.core.oam.dev",
-			Namespace: "vela-system",
-			Labels:    label,
-		},
-		Spec: v1alpha2.WorkloadDefinitionSpec{
-			Reference: commontypes.DefinitionReference{
-				Name: "containerizedworkloads.core.oam.dev",
-			},
-			ChildResourceKinds: []commontypes.ChildResourceKind{
-				{
-					APIVersion: corev1.SchemeGroupVersion.String(),
-					Kind:       util.KindService,
-				},
-				{
-					APIVersion: appsv1.SchemeGroupVersion.String(),
-					Kind:       util.KindDeployment,
-				},
-			},
-		},
-	}
-	Expect(k8sClient.Create(context.Background(), &wd)).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
-	By("Created containerizedworkload.core.oam.dev")
 
 	// create workload definition for 'deployments'
 	wdDeploy := v1alpha2.WorkloadDefinition{
@@ -225,54 +182,6 @@ var _ = BeforeSuite(func(done Done) {
 	Expect(k8sClient.Create(context.Background(), &adminRoleBinding)).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
 	By("Created cluster role binding for the test service account")
 
-	crd = crdv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   "bars.example.com",
-			Labels: map[string]string{"crd": "revision-test"},
-		},
-		Spec: crdv1.CustomResourceDefinitionSpec{
-			Group: "example.com",
-			Names: crdv1.CustomResourceDefinitionNames{
-				Kind:     "Bar",
-				ListKind: "BarList",
-				Plural:   "bars",
-				Singular: "bar",
-			},
-			Versions: []crdv1.CustomResourceDefinitionVersion{
-				{
-					Name:    "v1",
-					Served:  true,
-					Storage: true,
-					Schema: &crdv1.CustomResourceValidation{
-						OpenAPIV3Schema: &crdv1.JSONSchemaProps{
-							Type: "object",
-							Properties: map[string]crdv1.JSONSchemaProps{
-								"spec": {
-									Type: "object",
-									Properties: map[string]crdv1.JSONSchemaProps{
-										"key": {Type: "string"},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			Scope: crdv1.NamespaceScoped,
-		},
-	}
-	Expect(k8sClient.Create(context.Background(), &crd)).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
-	By("Created a crd for revision mechanism test")
-
-	By("Create workload definition for revision mechanism test")
-	var nwd v1alpha2.WorkloadDefinition
-	Expect(common.ReadYamlToObject("testdata/revision/workload-def.yaml", &nwd)).Should(BeNil())
-	Eventually(
-		func() error {
-			return k8sClient.Create(context.Background(), &nwd)
-		},
-		time.Second*3, time.Millisecond*300).Should(SatisfyAny(BeNil(), &util.AlreadyExistMatcher{}))
-
 	close(done)
 }, 300)
 
@@ -286,21 +195,13 @@ var _ = AfterSuite(func() {
 	}
 	Expect(k8sClient.Delete(context.Background(), &adminRoleBinding)).Should(BeNil())
 	By("Deleted the cluster role binding")
-
-	crd = crdv1.CustomResourceDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   "bars.example.com",
-			Labels: map[string]string{"crd": "revision-test"},
-		},
-	}
-	Expect(k8sClient.Delete(context.Background(), &crd)).Should(BeNil())
 })
 
-// requestReconcileNow will trigger an immediate reconciliation on K8s object.
+// RequestReconcileNow will trigger an immediate reconciliation on K8s object.
 // Some test cases may fail for timeout to wait a scheduled reconciliation.
 // This is a workaround to avoid long-time wait before next scheduled
 // reconciliation.
-func requestReconcileNow(ctx context.Context, o runtime.Object) {
+func RequestReconcileNow(ctx context.Context, o client.Object) {
 	oCopy := o.DeepCopyObject()
 	oMeta, ok := oCopy.(metav1.Object)
 	Expect(ok).Should(BeTrue())
@@ -309,12 +210,12 @@ func requestReconcileNow(ctx context.Context, o runtime.Object) {
 	})
 	oMeta.SetResourceVersion("")
 	By(fmt.Sprintf("Requset reconcile %q now", oMeta.GetName()))
-	Expect(k8sClient.Patch(ctx, oCopy, client.Merge)).Should(Succeed())
+	Expect(k8sClient.Patch(ctx, oCopy.(client.Object), client.Merge)).Should(Succeed())
 }
 
 // randomNamespaceName generates a random name based on the basic name.
 // Running each ginkgo case in a new namespace with a random name can avoid
-// waiting a long time to GC namesapce.
+// waiting a long time to GC namespace.
 func randomNamespaceName(basic string) string {
 	return fmt.Sprintf("%s-%s", basic, strconv.FormatInt(rand.Int63(), 16))
 }

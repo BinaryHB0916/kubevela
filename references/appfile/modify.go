@@ -23,6 +23,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/oam-dev/kubevela/apis/core.oam.dev/common"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
 	"github.com/oam-dev/kubevela/references/appfile/api"
 )
@@ -71,10 +72,14 @@ func SetTrait(app *v1beta1.Application, componentName, traitType string, traitDa
 				continue
 			}
 			added = true
-			app.Spec.Components[idx].Traits[j].Properties.Raw = data
+			if app.Spec.Components[idx].Traits[j].Properties == nil && data != nil {
+				app.Spec.Components[idx].Traits[j].Properties = &runtime.RawExtension{Raw: data}
+			} else {
+				app.Spec.Components[idx].Traits[j].Properties.Raw = data
+			}
 		}
 		if !added {
-			app.Spec.Components[idx].Traits = append(app.Spec.Components[idx].Traits, v1beta1.ApplicationTrait{Type: traitType, Properties: runtime.RawExtension{Raw: data}})
+			app.Spec.Components[idx].Traits = append(app.Spec.Components[idx].Traits, common.ApplicationTrait{Type: traitType, Properties: &runtime.RawExtension{Raw: data}})
 		}
 	}
 	if !foundComp {
@@ -102,7 +107,7 @@ func RemoveComponent(app *v1beta1.Application, componentName string) error {
 	if app == nil {
 		return errorAppNilPointer
 	}
-	var newComps []v1beta1.ApplicationComponent
+	var newComps []common.ApplicationComponent
 	for _, comp := range app.Spec.Components {
 		if comp.Name == componentName {
 			continue

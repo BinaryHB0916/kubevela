@@ -22,12 +22,14 @@ import (
 	"time"
 
 	"github.com/Netflix/go-expect"
+	"github.com/crossplane/crossplane-runtime/pkg/meta"
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1alpha2"
+	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
 	"github.com/oam-dev/kubevela/e2e"
+	"github.com/oam-dev/kubevela/pkg/utils/common"
 )
 
 var (
@@ -37,27 +39,34 @@ var (
 	traitAlias                  = "scaler"
 	appNameForInit              = "initmyapp"
 	jsonAppFile                 = `{"name":"nginx-vela","services":{"nginx":{"type":"webservice","image":"nginx:1.9.4","port":80}}}`
+	testDeleteJsonAppFile       = `{"name":"test-vela-delete","services":{"nginx-test":{"type":"webservice","image":"nginx:1.9.4","port":80}}}`
 	appbasicJsonAppFile         = `{"name":"app-basic","services":{"app-basic":{"type":"webservice","image":"nginx:1.9.4","port":80}}}`
 	appbasicAddTraitJsonAppFile = `{"name":"app-basic","services":{"app-basic":{"type":"webservice","image":"nginx:1.9.4","port":80,"scaler":{"replicas":2}}}}`
 )
 
 var _ = ginkgo.Describe("Test Vela Application", func() {
 	e2e.JsonAppFileContext("json appfile apply", jsonAppFile)
-	e2e.EnvSetContext("env set", "default")
+	e2e.EnvSetContext("env set default", "default")
 	e2e.DeleteEnvFunc("env delete", envName)
-	e2e.EnvInitContext("env init", envName)
+	e2e.EnvInitContext("env init env-application", envName)
 	e2e.EnvSetContext("env set", envName)
 	e2e.JsonAppFileContext("deploy app-basic", appbasicJsonAppFile)
+	ApplicationExecContext("exec -- COMMAND", applicationName)
+	ApplicationPortForwardContext("port-forward", applicationName)
 	e2e.JsonAppFileContext("update app-basic, add scaler trait with replicas 2", appbasicAddTraitJsonAppFile)
 	e2e.ComponentListContext("ls", applicationName, workloadType, traitAlias)
 	ApplicationStatusContext("status", applicationName, workloadType)
 	ApplicationStatusDeeplyContext("status", applicationName, workloadType, envName)
-	ApplicationExecContext("exec -- COMMAND", applicationName)
-	ApplicationPortForwardContext("port-forward", applicationName)
 	e2e.WorkloadDeleteContext("delete", applicationName)
 
 	ApplicationInitIntercativeCliContext("test vela init app", appNameForInit, workloadType)
 	e2e.WorkloadDeleteContext("delete", appNameForInit)
+
+	e2e.JsonAppFileContext("json appfile apply", testDeleteJsonAppFile)
+	ApplicationDeleteWithWaitOptions("test delete with wait option", "test-vela-delete")
+
+	e2e.JsonAppFileContext("json appfile apply", testDeleteJsonAppFile)
+	ApplicationDeleteWithForceOptions("test delete with force option", "test-vela-delete")
 })
 
 var ApplicationStatusContext = func(context string, applicationName string, workloadType string) bool {
@@ -76,11 +85,11 @@ var ApplicationStatusDeeplyContext = func(context string, applicationName, workl
 	return ginkgo.Context(context, func() {
 		ginkgo.It("should get status of the service", func() {
 			ginkgo.By("init new k8s client")
-			k8sclient, err := e2e.NewK8sClient()
+			k8sclient, err := common.NewK8sClient()
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 			ginkgo.By("check Application reconciled ready")
-			app := &v1alpha2.Application{}
+			app := &v1beta1.Application{}
 			gomega.Eventually(func() bool {
 				_ = k8sclient.Get(context2.Background(), client.ObjectKey{Name: applicationName, Namespace: "default"}, app)
 				return app.Status.LatestRevision != nil
@@ -89,7 +98,7 @@ var ApplicationStatusDeeplyContext = func(context string, applicationName, workl
 			cli := fmt.Sprintf("vela status %s", applicationName)
 			output, err := e2e.LongTimeExec(cli, 120*time.Second)
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
-			gomega.Expect(output).To(gomega.ContainSubstring("Checking health status"))
+			gomega.Expect(output).To(gomega.ContainSubstring("healthy"))
 			// TODO(zzxwill) need to check workloadType after app status is refined
 		})
 	})
@@ -110,8 +119,8 @@ var ApplicationExecContext = func(context string, appName string) bool {
 
 var ApplicationPortForwardContext = func(context string, appName string) bool {
 	return ginkgo.Context(context, func() {
-		ginkgo.It("should get output of portward successfully", func() {
-			cli := fmt.Sprintf("vela port-forward %s 8080:8080 ", appName)
+		ginkgo.It("should get output of port-forward successfully", func() {
+			cli := fmt.Sprintf("vela port-forward %s 8080:80 ", appName)
 			output, err := e2e.ExecAndTerminate(cli)
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 			gomega.Expect(output).To(gomega.ContainSubstring("Forward successfully"))
@@ -128,14 +137,6 @@ var ApplicationInitIntercativeCliContext = func(context string, appName string, 
 					q, a string
 				}{
 					{
-						q: "What is the domain of your application service (optional): ",
-						a: "testdomain",
-					},
-					{
-						q: "What is your email (optional, used to generate certification): ",
-						a: "test@mail",
-					},
-					{
 						q: "What would you like to name your application (required): ",
 						a: appName,
 					},
@@ -148,16 +149,12 @@ var ApplicationInitIntercativeCliContext = func(context string, appName string, 
 						a: "mysvc",
 					},
 					{
-						q: "If addRevisionLabel is true, the appRevision label will be added to the underlying pods (optional, default is false):",
-						a: "N",
-					},
-					{
 						q: "Which image would you like to use for your service ",
 						a: "nginx:latest",
 					},
 					{
-						q: "Which port do you want customer traffic sent to ",
-						a: "",
+						q: "Specify image pull policy for your service ",
+						a: "Always",
 					},
 					{
 						q: "Number of CPU units for the service, like `0.5` (0.5 CPU core), `1` (1 CPU core) (optional):",
@@ -178,6 +175,57 @@ var ApplicationInitIntercativeCliContext = func(context string, appName string, 
 			})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 			gomega.Expect(output).To(gomega.ContainSubstring("Checking Status"))
+		})
+	})
+}
+
+var ApplicationDeleteWithWaitOptions = func(context string, appName string) bool {
+	return ginkgo.Context(context, func() {
+		ginkgo.It("should print successful deletion information", func() {
+			cli := fmt.Sprintf("vela delete %s --wait", appName)
+			output, err := e2e.ExecAndTerminate(cli)
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			gomega.Expect(output).To(gomega.ContainSubstring("deleted"))
+		})
+	})
+}
+
+var ApplicationDeleteWithForceOptions = func(context string, appName string) bool {
+	return ginkgo.Context(context, func() {
+		ginkgo.It("should print successful deletion information", func() {
+			args := common.Args{
+				Schema: common.Scheme,
+			}
+			ctx := context2.Background()
+
+			k8sClient, err := args.GetClient()
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+			app := new(v1beta1.Application)
+			gomega.Eventually(func() error {
+				if err := k8sClient.Get(ctx, client.ObjectKey{Name: appName, Namespace: "default"}, app); err != nil {
+					return err
+				}
+				meta.AddFinalizer(app, "test")
+				return k8sClient.Update(ctx, app)
+			}, time.Second*3, time.Millisecond*300).Should(gomega.BeNil())
+
+			cli := fmt.Sprintf("vela delete %s --force", appName)
+			output, err := e2e.LongTimeExec(cli, 3*time.Minute)
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			gomega.Expect(output).To(gomega.ContainSubstring("timed out"))
+
+			app = new(v1beta1.Application)
+			gomega.Eventually(func(g gomega.Gomega) {
+				g.Expect(k8sClient.Get(ctx, client.ObjectKey{Name: appName, Namespace: "default"}, app)).Should(gomega.Succeed())
+				meta.RemoveFinalizer(app, "test")
+				g.Expect(k8sClient.Update(ctx, app)).Should(gomega.Succeed())
+			}, time.Second*5, time.Millisecond*300).Should(gomega.Succeed())
+
+			cli = fmt.Sprintf("vela delete %s --force", appName)
+			output, err = e2e.ExecAndTerminate(cli)
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			gomega.Expect(output).To(gomega.ContainSubstring("deleted"))
 		})
 	})
 }

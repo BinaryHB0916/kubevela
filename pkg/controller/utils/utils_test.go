@@ -22,12 +22,12 @@ import (
 	"strconv"
 	"testing"
 
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/stretchr/testify/assert"
 	v12 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/pointer"
@@ -39,30 +39,24 @@ import (
 	oamutil "github.com/oam-dev/kubevela/pkg/oam/util"
 )
 
-var _ = Describe("utils", func() {
-	Context("GetEnabledCapabilities", func() {
-		It("disable all", func() {
-			disableCaps := "all"
-			err := CheckDisabledCapabilities(disableCaps)
-			Expect(err).NotTo(HaveOccurred())
-		})
-		It("disable none", func() {
-			disableCaps := ""
-			err := CheckDisabledCapabilities(disableCaps)
-			Expect(err).NotTo(HaveOccurred())
-		})
-		It("disable some capabilities", func() {
-			disableCaps := "autoscale,route"
-			err := CheckDisabledCapabilities(disableCaps)
-			Expect(err).NotTo(HaveOccurred())
-		})
-		It("disable some bad capabilities", func() {
-			disableCaps := "abc,def"
-			err := CheckDisabledCapabilities(disableCaps)
-			Expect(err).To(HaveOccurred())
-		})
-	})
-})
+func TestCheckDisabledCapabilities(t *testing.T) {
+	disableCaps := "all"
+	err := CheckDisabledCapabilities(disableCaps)
+	assert.NoError(t, err)
+
+	disableCaps = ""
+	err = CheckDisabledCapabilities(disableCaps)
+	assert.NoError(t, err)
+
+	disableCaps = "rollout,healthscope"
+	err = CheckDisabledCapabilities(disableCaps)
+	assert.NoError(t, err)
+
+	disableCaps = "abc,def"
+	err = CheckDisabledCapabilities(disableCaps)
+	assert.NotNil(t, err)
+	assert.Equal(t, err.Error(), "abc in disable caps list is not built-in")
+}
 
 func TestConstructExtract(t *testing.T) {
 	tests := []string{"tam1", "test-comp", "xx", "tt-x-x-c"}
@@ -98,26 +92,30 @@ func TestCompareWithRevision(t *testing.T) {
 	latestRevision := "revision"
 	imageV1 := "wordpress:4.6.1-apache"
 	namespaceName := "test"
-	cwV1 := v1alpha2.ContainerizedWorkload{
+	cwV1 := v12.Deployment{
 		TypeMeta: v1.TypeMeta{
-			Kind:       "ContainerizedWorkload",
-			APIVersion: "core.oam.dev/v1alpha2",
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
 		},
 		ObjectMeta: v1.ObjectMeta{
 			Namespace: namespaceName,
 		},
-		Spec: v1alpha2.ContainerizedWorkloadSpec{
-			Containers: []v1alpha2.Container{
-				{
-					Name:  "wordpress",
-					Image: imageV1,
-					Ports: []v1alpha2.ContainerPort{
+		Spec: v12.DeploymentSpec{
+			Selector: &v1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "wordpress",
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
 						{
-							Name: "wordpress",
-							Port: 80,
+							Name:  "wordpress",
+							Image: imageV1,
 						},
 					},
 				},
+				ObjectMeta: v1.ObjectMeta{Labels: map[string]string{"app": "wordpress"}},
 			},
 		},
 	}
@@ -164,7 +162,7 @@ func TestCompareWithRevision(t *testing.T) {
 		expectedErr    error
 	}{
 		"compare object": {
-			getFunc: func(obj runtime.Object) error {
+			getFunc: func(obj client.Object) error {
 				o, ok := obj.(*v12.ControllerRevision)
 				if !ok {
 					t.Errorf("the object %+v is not of type controller revision", o)

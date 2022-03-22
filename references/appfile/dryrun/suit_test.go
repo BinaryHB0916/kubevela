@@ -17,13 +17,15 @@ limitations under the License.
 package dryrun
 
 import (
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+
+	crdv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -34,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	coreoam "github.com/oam-dev/kubevela/apis/core.oam.dev"
+	"github.com/oam-dev/kubevela/pkg/appfile"
 	"github.com/oam-dev/kubevela/pkg/cue/packages"
 	"github.com/oam-dev/kubevela/pkg/oam"
 	"github.com/oam-dev/kubevela/pkg/oam/discoverymapper"
@@ -61,8 +64,10 @@ var _ = BeforeSuite(func(done Done) {
 	By("bootstrapping test environment")
 	useExistCluster := false
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:  []string{filepath.Join("..", "..", "..", "charts", "vela-core", "crds")},
-		UseExistingCluster: &useExistCluster,
+		ControlPlaneStartTimeout: time.Minute,
+		ControlPlaneStopTimeout:  time.Minute,
+		CRDDirectoryPaths:        []string{filepath.Join("..", "..", "..", "charts", "vela-core", "crds")},
+		UseExistingCluster:       &useExistCluster,
 	}
 
 	var err error
@@ -72,7 +77,7 @@ var _ = BeforeSuite(func(done Done) {
 	scheme = runtime.NewScheme()
 	Expect(coreoam.AddToScheme(scheme)).NotTo(HaveOccurred())
 	Expect(clientgoscheme.AddToScheme(scheme)).NotTo(HaveOccurred())
-	Expect(v1beta1.AddToScheme(scheme)).NotTo(HaveOccurred())
+	Expect(crdv1.AddToScheme(scheme)).NotTo(HaveOccurred())
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
 	Expect(err).ToNot(HaveOccurred())
 	Expect(k8sClient).ToNot(BeNil())
@@ -103,7 +108,7 @@ var _ = BeforeSuite(func(done Done) {
 	Expect(err).Should(BeNil())
 
 	dryrunOpt = NewDryRunOption(k8sClient, dm, pd, []oam.Object{cdMyWorker, tdMyIngress, tdMyScaler})
-	diffOpt = &LiveDiffOption{dryrunOpt}
+	diffOpt = &LiveDiffOption{DryRun: dryrunOpt, Parser: appfile.NewApplicationParser(k8sClient, dm, pd)}
 
 	close(done)
 }, 60)
@@ -115,6 +120,6 @@ var _ = AfterSuite(func() {
 })
 
 func readDataFromFile(path string) string {
-	b, _ := ioutil.ReadFile(path)
+	b, _ := os.ReadFile(path)
 	return string(b)
 }

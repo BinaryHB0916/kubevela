@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -31,6 +30,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	corev1beta1 "github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
+	"github.com/oam-dev/kubevela/apis/types"
 	"github.com/oam-dev/kubevela/pkg/oam"
 	"github.com/oam-dev/kubevela/pkg/oam/discoverymapper"
 	oamutil "github.com/oam-dev/kubevela/pkg/oam/util"
@@ -53,17 +53,17 @@ func NewDryRunCommand(c common.Args, ioStreams cmdutil.IOStreams) *cobra.Command
 		Use:                   "dry-run",
 		DisableFlagsInUseLine: true,
 		Short:                 "Dry Run an application, and output the K8s resources as result to stdout",
-		Long:                  "Dry Run an application, and output the K8s resources as result to stdout, only CUE template supported for now",
+		Long:                  "Dry-run application locally, render the Kubernetes resources as result to stdout.",
 		Example:               "vela dry-run",
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return c.SetConfig()
+		Annotations: map[string]string{
+			types.TagCommandType: types.TypeApp,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			velaEnv, err := GetEnv(cmd)
+			namespace, err := GetFlagNamespaceOrEnv(cmd, c)
 			if err != nil {
 				return err
 			}
-			buff, err := DryRunApplication(o, c, velaEnv.Namespace)
+			buff, err := DryRunApplication(o, c, namespace)
 			if err != nil {
 				return err
 			}
@@ -74,6 +74,7 @@ func NewDryRunCommand(c common.Args, ioStreams cmdutil.IOStreams) *cobra.Command
 
 	cmd.Flags().StringVarP(&o.ApplicationFile, "file", "f", "./app.yaml", "application file name")
 	cmd.Flags().StringVarP(&o.DefinitionFile, "definition", "d", "", "specify a definition file or directory, it will only be used in dry-run rather than applied to K8s cluster")
+	addNamespaceAndEnvArg(cmd)
 	cmd.SetOut(ioStreams.Out)
 	return cmd
 }
@@ -97,8 +98,11 @@ func DryRunApplication(cmdOption *DryRunCmdOptions, c common.Args, namespace str
 	if err != nil {
 		return buff, err
 	}
-
-	dm, err := discoverymapper.New(c.Config)
+	config, err := c.GetConfig()
+	if err != nil {
+		return buff, err
+	}
+	dm, err := discoverymapper.New(config)
 	if err != nil {
 		return buff, err
 	}
@@ -120,7 +124,7 @@ func DryRunApplication(cmdOption *DryRunCmdOptions, c common.Args, namespace str
 		components[comp.Name] = comp.StandardWorkload
 	}
 	for _, c := range comps {
-		buff.Write([]byte(fmt.Sprintf("---\n# Application(%s) -- Comopnent(%s) \n---\n\n", app.Name, c.Name)))
+		buff.Write([]byte(fmt.Sprintf("---\n# Application(%s) -- Component(%s) \n---\n\n", app.Name, c.Name)))
 		result, err := yaml.Marshal(components[c.Name])
 		if err != nil {
 			return buff, errors.WithMessage(err, "marshal result for component "+c.Name+" object in yaml format")
@@ -157,7 +161,7 @@ func ReadObjectsFromFile(path string) ([]oam.Object, error) {
 
 	var objs []oam.Object
 	//nolint:gosec
-	fis, err := ioutil.ReadDir(path)
+	fis, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +185,7 @@ func ReadObjectsFromFile(path string) ([]oam.Object, error) {
 
 func readApplicationFromFile(filename string) (*corev1beta1.Application, error) {
 
-	fileContent, err := ioutil.ReadFile(filepath.Clean(filename))
+	fileContent, err := os.ReadFile(filepath.Clean(filename))
 	if err != nil {
 		return nil, err
 	}

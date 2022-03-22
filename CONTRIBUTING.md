@@ -13,6 +13,7 @@ This document is a guide to help you through the process of contributing to Kube
 You can contribute to KubeVela in several ways. Here are some examples:
 
 * Contribute to the KubeVela codebase.
+* Contribute to the [KubeVela docs](https://github.com/oam-dev/kubevela.io).
 * Report and triage bugs.
 * Develop community CRD operators as workload or trait and contribute to [catalog](https://github.com/oam-dev/catalog).
 * Write technical documentation and blog posts, for users and contributors.
@@ -20,6 +21,7 @@ You can contribute to KubeVela in several ways. Here are some examples:
 * Help others by answering questions about KubeVela.
 
 For more ways to contribute, check out the [Open Source Guides](https://opensource.guide/how-to-contribute/).
+
 
 ### Report bugs
 

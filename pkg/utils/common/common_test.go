@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,6 +32,9 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/oam-dev/kubevela/apis/core.oam.dev/common"
+	"github.com/oam-dev/kubevela/apis/types"
 )
 
 var ResponseString = "Hello HTTP Get."
@@ -125,7 +127,7 @@ output: {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := GetCUEParameterValue(tc.cueStr)
+			_, err := GetCUEParameterValue(tc.cueStr, nil)
 			if tc.want.err != nil {
 				if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
 					t.Errorf("\n%s\nGenOpenAPIFromFile(...): -want error, +got error:\n%s", tc.reason, diff)
@@ -160,7 +162,7 @@ name
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := GetCUEParameterValue(tc.cueStr)
+			_, err := GetCUEParameterValue(tc.cueStr, nil)
 			if diff := cmp.Diff(tc.want.errMsg, err.Error(), test.EquateConditions()); diff != "" {
 				t.Errorf("\n%s\nGenOpenAPIFromFile(...): -want error, +got error:\n%s", tc.reason, diff)
 			}
@@ -212,7 +214,7 @@ func TestGenOpenAPI(t *testing.T) {
 			if tc.want.targetSchemaFile == "" {
 				return
 			}
-			wantSchema, _ := ioutil.ReadFile(filepath.Join("testdata", tc.want.targetSchemaFile))
+			wantSchema, _ := os.ReadFile(filepath.Join("testdata", tc.want.targetSchemaFile))
 			if diff := cmp.Diff(wantSchema, got); diff != "" {
 				t.Errorf("\n%s\nGenOpenAPIFromFile(...): -want, +got:\n%s", tc.reason, diff)
 			}
@@ -232,7 +234,7 @@ func TestRealtimePrintCommandOutput(t *testing.T) {
 	err = RealtimePrintCommandOutput(cmd, logFile)
 	assert.NoError(t, err)
 
-	data, _ := ioutil.ReadFile(logFile)
+	data, _ := os.ReadFile(logFile)
 	assert.Contains(t, string(data), hello)
 	os.Remove(logFile)
 }
@@ -300,11 +302,70 @@ variable "mapVar" {
   type = "map"
 }`
 
-	variables, err := ParseTerraformVariables(configuration)
+	variables, _, err := ParseTerraformVariables(configuration)
 	assert.NoError(t, err)
 	_, passwordExisted := variables["password"]
 	assert.True(t, passwordExisted)
 
 	_, intVarExisted := variables["password"]
 	assert.True(t, intVarExisted)
+}
+
+func TestRefineParameterInstance(t *testing.T) {
+	// test #parameter exists: mock issues in #1939 & #2062
+	s := `parameter: #parameter
+#parameter: {
+	x?: string
+	if x != "" {
+	y: string
+	}
+}
+patch: {
+	if parameter.x != "" {
+	label: parameter.x
+	}
+}`
+	r := cue.Runtime{}
+	inst, err := r.Compile("-", s)
+	assert.NoError(t, err)
+	_, err = RefineParameterInstance(inst)
+	assert.NoError(t, err)
+	// test #parameter not exist but parameter exists
+	s = `parameter: {
+	x?: string
+	if x != "" {
+	y: string
+	}
+}`
+	inst, err = r.Compile("-", s)
+	assert.NoError(t, err)
+	_ = extractParameterDefinitionNodeFromInstance(inst)
+	_, err = RefineParameterInstance(inst)
+	assert.NoError(t, err)
+	// test #parameter as int
+	s = `parameter: #parameter
+#parameter: int`
+	inst, err = r.Compile("-", s)
+	assert.NoError(t, err)
+	_, err = RefineParameterInstance(inst)
+	assert.NoError(t, err)
+	// test invalid parameter kind
+	s = `parameter: #parameter
+#parameter: '\x03abc'`
+	inst, err = r.Compile("-", s)
+	assert.NoError(t, err)
+	_, err = RefineParameterInstance(inst)
+	assert.NotNil(t, err)
+}
+
+func TestFilterClusterObjectRefFromAddonObservability(t *testing.T) {
+	ref := common.ClusterObjectReference{}
+	ref.Name = AddonObservabilityGrafanaSvc
+	ref.Namespace = types.DefaultKubeVelaNS
+	resources := []common.ClusterObjectReference{ref}
+
+	res := filterClusterObjectRefFromAddonObservability(resources)
+	assert.Equal(t, 1, len(res))
+	assert.Equal(t, "Service", res[0].Kind)
+	assert.Equal(t, "v1", res[0].APIVersion)
 }

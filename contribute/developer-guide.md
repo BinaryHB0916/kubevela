@@ -4,30 +4,35 @@ This guide helps you get started developing KubeVela.
 
 ## Prerequisites
 
-1. Golang version 1.16+
+1. Golang version 1.17+
 2. Kubernetes version v1.18+ with `~/.kube/config` configured.
 3. ginkgo 1.14.0+ (just for [E2E test](./developer-guide.md#e2e-test))
 4. golangci-lint 1.38.0+, it will install automatically if you run `make`, you can [install it manually](https://golangci-lint.run/usage/install/#local-installation) if the installation is too slow.
-5. kubebuilder v2.3.0+
+5. kubebuilder v3.1.0+ and you need to manually install the dependency tools for unit test.
+6. [CUE binary](https://github.com/cue-lang/cue/releases) v0.3.0+
 
 <details>
   <summary>Install Kubebuilder manually</summary>
 
 linux:
+
 ```
-wget https://github.com/kubernetes-sigs/kubebuilder/releases/download/v2.3.1/kubebuilder_2.3.1_linux_amd64.tar.gz
-tar -zxvf  kubebuilder_2.3.1_linux_amd64.tar.gz
+wget https://storage.googleapis.com/kubebuilder-tools/kubebuilder-tools-1.21.2-linux-amd64.tar.gz
+tar -zxvf  kubebuilder-tools-1.21.2-linux-amd64.tar.gz
 mkdir -p /usr/local/kubebuilder/bin
-sudo mv kubebuilder_2.3.1_linux_amd64/bin/* /usr/local/kubebuilder/bin
+sudo mv kubebuilder/bin/* /usr/local/kubebuilder/bin
 ```
 
 macOS:
+
 ```
-wget https://github.com/kubernetes-sigs/kubebuilder/releases/download/v2.3.1/kubebuilder_2.3.1_darwin_amd64.tar.gz
-tar -zxvf  kubebuilder_2.3.1_darwin_amd64.tar.gz
+wget https://storage.googleapis.com/kubebuilder-tools/kubebuilder-tools-1.21.2-darwin-amd64.tar.gz
+tar -zxvf  kubebuilder-tools-1.21.2-darwin-amd64.tar.gz
 mkdir -p /usr/local/kubebuilder/bin
-sudo mv kubebuilder_2.3.1_darwin_amd64/bin/* /usr/local/kubebuilder/bin
+sudo mv kubebuilder/bin/* /usr/local/kubebuilder/bin
 ```
+
+For other OS or system architecture, please refer to https://storage.googleapis.com/kubebuilder-tools/
 
 </details>
 
@@ -35,7 +40,7 @@ You may also be interested with KubeVela's [design](https://github.com/oam-dev/k
 
 ## Build
 
-* Clone this project
+- Clone this project
 
 ```shell script
 git clone git@github.com:oam-dev/kubevela.git
@@ -48,7 +53,7 @@ KubeVela includes two parts, `vela core` and `vela cli`.
 
 For local development, we probably need to build both of them.
 
-* Build Vela CLI
+- Build Vela CLI
 
 ```shell script
 make
@@ -56,7 +61,7 @@ make
 
 After the vela cli built successfully, `make` command will create `vela` binary to `bin/` under the project.
 
-* Configure `vela` binary to System PATH
+- Configure `vela` binary to System PATH
 
 ```shell script
 export PATH=$PATH:/your/path/to/project/kubevela/bin
@@ -64,13 +69,13 @@ export PATH=$PATH:/your/path/to/project/kubevela/bin
 
 Then you can use `vela` command directly.
 
-* Build Vela Core
+- Build Vela Core
 
 ```shell script
 make manager
 ```
 
-* Run Vela Core
+- Run Vela Core
 
 Firstly make sure your cluster has CRDs, below is the command that can help install all CRDs.
 
@@ -78,7 +83,14 @@ Firstly make sure your cluster has CRDs, below is the command that can help inst
 make core-install
 ```
 
-Run locally:
+To ensure you have created vela-system namespace and install definitions of necessary module.
+you can run the command:
+
+```shell script
+make def-install
+```
+
+And then run locally:
 
 ```shell script
 make core-run
@@ -109,6 +121,12 @@ You can try use your local built binaries follow [the documentation](https://kub
 make test
 ```
 
+To execute the unit test of the API module, the mongodb service needs to exist locally.
+
+```shell script
+make unit-test-apiserver
+```
+
 ### E2E test
 
 **Before e2e test start, make sure you have vela-core running.**
@@ -119,27 +137,57 @@ make core-run
 
 Start to test.
 
-```
+```shell script
 make e2e-test
 ```
 
-## Contribute Docs
+## Contribute apiserver and [velaux](https://github.com/oam-dev/velaux)
 
-Please read [the documentation](https://github.com/oam-dev/kubevela/tree/master/docs/README.md) before contributing to the docs.
+Before start, please make sure you have already started the vela controller environment.
 
-- Build docs
-
-```shell script
-make docs-build
+```shell
+make run-apiserver
 ```
 
-- Local development and preview
+By default, the apiserver will serving at "0.0.0.0:8000".
+
+Get the velaux code by:
+
+```shell
+git clone git@github.com:oam-dev/velaux.git
+```
+
+Configure the apiserver address:
+
+```shell
+cd velaux
+echo "BASE_DOMAIN='http://127.0.0.1:8000'" > .env
+```
+
+Make sure you have installed [yarn](https://classic.yarnpkg.com/en/docs/install).
+
+```shell
+yarn install
+yarn start
+```
+
+To execute the e2e test of the API module, the mongodb service needs to exist locally.
 
 ```shell script
-make docs-start
+# save your config
+mv ~/.kube/config  ~/.kube/config.save
+
+kind create cluster --image kindest/node:v1.18.15@sha256:5c1b980c4d0e0e8e7eb9f36f7df525d079a96169c8a8f20d8bd108c0d0889cc4 --name worker
+kind get kubeconfig --name worker --internal > /tmp/worker.kubeconfig
+kind get kubeconfig --name worker > /tmp/worker.client.kubeconfig
+
+# restore your config
+mv ~/.kube/config.save  ~/.kube/config
+
+make e2e-apiserver-test
 ```
 
 ## Next steps
 
-* Read our [code conventions](coding-conventions.md)
-* Learn how to [Create a pull request](create-pull-request.md)
+- Read our [code conventions](coding-conventions.md)
+- Learn how to [Create a pull request](create-pull-request.md)

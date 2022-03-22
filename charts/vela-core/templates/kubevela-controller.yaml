@@ -1,5 +1,3 @@
----
-
 {{- if .Values.serviceAccount.create -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -92,6 +90,10 @@ spec:
     metadata:
       labels:
     {{- include "kubevela.selectorLabels" . | nindent 8 }}
+      annotations:
+          prometheus.io/path: /metrics
+          prometheus.io/port: "8080"
+          prometheus.io/scrape: "true"
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -118,20 +120,26 @@ spec:
             - "--use-webhook=true"
             - "--webhook-port={{ .Values.webhookService.port }}"
             - "--webhook-cert-dir={{ .Values.admissionWebhooks.certificate.mountPath }}"
-            - "--autogen-workload-definition={{ .Values.admissionWebhooks.autoGenWorkloadDefinition }}"
-            {{ end }}
-            {{ if not .Values.useAppConfig }}
-            - "--app-config-installed=false"
             {{ end }}
             - "--health-addr=:{{ .Values.healthCheck.port }}"
-            - "--apply-once-only={{ .Values.applyOnceOnly }}"
             {{ if ne .Values.disableCaps "" }}
             - "--disable-caps={{ .Values.disableCaps }}"
             {{ end }}
-            - "--system-definition-namespace={{ .Values.systemDefinitionNamespace }}"
+            - "--system-definition-namespace={{ include "systemDefinitionNamespace" . }}"
             - "--application-revision-limit={{ .Values.applicationRevisionLimit }}"
             - "--definition-revision-limit={{ .Values.definitionRevisionLimit }}"
-          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+            - "--oam-spec-ver={{ .Values.OAMSpecVer }}"
+            {{ if .Values.multicluster.enabled }}
+            - "--enable-cluster-gateway"
+            {{ end }}
+            - "--application-re-sync-period={{ .Values.controllerArgs.reSyncPeriod }}"
+            - "--concurrent-reconciles={{ .Values.concurrentReconciles }}"
+            - "--kube-api-qps={{ .Values.kubeClient.qps }}"
+            - "--kube-api-burst={{ .Values.kubeClient.burst }}"
+            - "--max-workflow-wait-backoff-time={{ .Values.workflow.backoff.maxTime.waitState }}"
+            - "--max-workflow-failed-backoff-time={{ .Values.workflow.backoff.maxTime.failedState }}"
+            - "--max-workflow-step-error-retry-times={{ .Values.workflow.step.errorRetryTimes }}"
+          image: {{ .Values.imageRegistry }}{{ .Values.image.repository }}:{{ .Values.image.tag }}
           imagePullPolicy: {{ quote .Values.image.pullPolicy }}
           resources:
           {{- toYaml .Values.resources | nindent 12 }}
@@ -147,7 +155,7 @@ spec:
             httpGet:
               path: /readyz
               port: healthz
-            initialDelaySeconds: 90
+            initialDelaySeconds: 30
             periodSeconds: 5
           livenessProbe:
             httpGet:

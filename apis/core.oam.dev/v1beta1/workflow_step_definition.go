@@ -17,8 +17,9 @@
 package v1beta1
 
 import (
-	runtimev1alpha1 "github.com/crossplane/crossplane-runtime/apis/core/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/oam-dev/kubevela/apis/core.oam.dev/condition"
 
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/common"
 )
@@ -36,20 +37,21 @@ type WorkflowStepDefinitionSpec struct {
 // WorkflowStepDefinitionStatus is the status of WorkflowStepDefinition
 type WorkflowStepDefinitionStatus struct {
 	// ConditionedStatus reflects the observed status of a resource
-	runtimev1alpha1.ConditionedStatus `json:",inline"`
-
+	condition.ConditionedStatus `json:",inline"`
+	// ConfigMapRef refer to a ConfigMap which contains OpenAPI V3 JSON schema of Component parameters.
+	ConfigMapRef string `json:"configMapRef,omitempty"`
 	// LatestRevision of the component definition
 	// +optional
 	LatestRevision *common.Revision `json:"latestRevision,omitempty"`
 }
 
 // SetConditions set condition for WorkflowStepDefinition
-func (d *WorkflowStepDefinition) SetConditions(c ...runtimev1alpha1.Condition) {
+func (d *WorkflowStepDefinition) SetConditions(c ...condition.Condition) {
 	d.Status.SetConditions(c...)
 }
 
 // GetCondition gets condition from WorkflowStepDefinition
-func (d *WorkflowStepDefinition) GetCondition(conditionType runtimev1alpha1.ConditionType) runtimev1alpha1.Condition {
+func (d *WorkflowStepDefinition) GetCondition(conditionType condition.ConditionType) condition.Condition {
 	return d.Status.GetCondition(conditionType)
 }
 
@@ -59,6 +61,8 @@ func (d *WorkflowStepDefinition) GetCondition(conditionType runtimev1alpha1.Cond
 // +kubebuilder:resource:scope=Namespaced,categories={oam},shortName=workflowstep
 // +kubebuilder:storageversion
 // +kubebuilder:subresource:status
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type WorkflowStepDefinition struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -68,6 +72,7 @@ type WorkflowStepDefinition struct {
 }
 
 // +kubebuilder:object:root=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // WorkflowStepDefinitionList contains a list of WorkflowStepDefinition
 type WorkflowStepDefinitionList struct {

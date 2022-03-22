@@ -22,6 +22,8 @@ import (
 	"os"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/pkg/errors"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
@@ -33,6 +35,7 @@ import (
 	"github.com/oam-dev/kubevela/apis/types"
 	"github.com/oam-dev/kubevela/pkg/appfile"
 	"github.com/oam-dev/kubevela/pkg/cue"
+	"github.com/oam-dev/kubevela/pkg/cue/packages"
 	"github.com/oam-dev/kubevela/pkg/oam/discoverymapper"
 	"github.com/oam-dev/kubevela/pkg/oam/util"
 	"github.com/oam-dev/kubevela/pkg/utils/common"
@@ -111,18 +114,24 @@ func GetComponentsFromClusterWithValidateOption(ctx context.Context, namespace s
 		if err != nil {
 			return nil, nil, err
 		}
-		ref, err := util.ConvertWorkloadGVK2Definition(dm, cd.Spec.Workload.Definition)
-		if err != nil {
-			return nil, nil, err
+
+		defRef := commontypes.DefinitionReference{
+			Name: cd.Spec.Workload.Type,
+		}
+		if cd.Spec.Workload.Type != types.AutoDetectWorkloadDefinition {
+			defRef, err = util.ConvertWorkloadGVK2Definition(dm, cd.Spec.Workload.Definition)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 
-		tmp, err := GetCapabilityByComponentDefinitionObject(cd, ref.Name)
+		tmp, err := GetCapabilityByComponentDefinitionObject(cd, defRef.Name)
 		if err != nil {
 			templateErrors = append(templateErrors, err)
 			continue
 		}
-		if validateFlag {
-			if err = validateCapabilities(tmp, dm, cd.Name, ref); err != nil {
+		if validateFlag && defRef.Name != types.AutoDetectWorkloadDefinition {
+			if err = validateCapabilities(tmp, dm, cd.Name, defRef); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -142,7 +151,11 @@ func GetTraitsFromClusterWithValidateOption(ctx context.Context, namespace strin
 	if err != nil {
 		return nil, nil, err
 	}
-	dm, err := discoverymapper.New(c.Config)
+	config, err := c.GetConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+	dm, err := discoverymapper.New(config)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -191,7 +204,7 @@ func validateCapabilities(tmp *types.Capability, dm discoverymapper.DiscoveryMap
 		return fmt.Errorf("installing capability '%s'... %w", definitionName, err)
 	}
 	tmp.CrdInfo = &types.CRDInfo{
-		APIVersion: gvk.GroupVersion().String(),
+		APIVersion: metav1.GroupVersion{Group: gvk.Group, Version: gvk.Version}.String(),
 		Kind:       gvk.Kind,
 	}
 
@@ -199,9 +212,10 @@ func validateCapabilities(tmp *types.Capability, dm discoverymapper.DiscoveryMap
 }
 
 // HandleDefinition will handle definition to capability
-func HandleDefinition(name, crdName string, annotation map[string]string, extension *runtime.RawExtension, tp types.CapType, applyTo []string, schematic *commontypes.Schematic) (types.Capability, error) {
+func HandleDefinition(name, crdName string, annotation, labels map[string]string, extension *runtime.RawExtension, tp types.CapType,
+	applyTo []string, schematic *commontypes.Schematic, pd *packages.PackageDiscover) (types.Capability, error) {
 	var tmp types.Capability
-	tmp, err := HandleTemplate(extension, schematic, name)
+	tmp, err := HandleTemplate(extension, schematic, name, pd)
 	if err != nil {
 		return types.Capability{}, err
 	}
@@ -211,6 +225,7 @@ func HandleDefinition(name, crdName string, annotation map[string]string, extens
 	}
 	tmp.CrdName = crdName
 	tmp.Description = GetDescription(annotation)
+	tmp.Labels = labels
 	return tmp, nil
 }
 
@@ -219,7 +234,7 @@ func GetDescription(annotation map[string]string) string {
 	if annotation == nil {
 		return DescriptionUndefined
 	}
-	desc, ok := annotation[types.AnnDescription]
+	desc, ok := annotation[types.AnnoDefinitionDescription]
 	if !ok {
 		return DescriptionUndefined
 	}
@@ -228,7 +243,7 @@ func GetDescription(annotation map[string]string) string {
 }
 
 // HandleTemplate will handle definition template to capability
-func HandleTemplate(in *runtime.RawExtension, schematic *commontypes.Schematic, name string) (types.Capability, error) {
+func HandleTemplate(in *runtime.RawExtension, schematic *commontypes.Schematic, name string, pd *packages.PackageDiscover) (types.Capability, error) {
 	tmp, err := appfile.ConvertTemplateJSON2Object(name, in, schematic)
 	if err != nil {
 		return types.Capability{}, err
@@ -243,6 +258,8 @@ func HandleTemplate(in *runtime.RawExtension, schematic *commontypes.Schematic, 
 		if schematic.Terraform != nil {
 			tmp.Category = types.TerraformCategory
 			tmp.TerraformConfiguration = schematic.Terraform.Configuration
+			tmp.ConfigurationType = schematic.Terraform.Type
+			tmp.Path = schematic.Terraform.Path
 			return tmp, nil
 		}
 		if schematic.KUBE != nil {
@@ -266,7 +283,7 @@ func HandleTemplate(in *runtime.RawExtension, schematic *commontypes.Schematic, 
 		}
 		return types.Capability{}, errors.New("template not exist in definition")
 	}
-	tmp.Parameters, err = cue.GetParameters(tmp.CueTemplate)
+	tmp.Parameters, err = cue.GetParameters(tmp.CueTemplate, pd)
 	if err != nil {
 		return types.Capability{}, err
 	}
@@ -275,7 +292,7 @@ func HandleTemplate(in *runtime.RawExtension, schematic *commontypes.Schematic, 
 }
 
 // GetCapabilityByName gets capability by definition name
-func GetCapabilityByName(ctx context.Context, c common.Args, capabilityName string, ns string) (*types.Capability, error) {
+func GetCapabilityByName(ctx context.Context, c common.Args, capabilityName string, ns string, pd *packages.PackageDiscover) (*types.Capability, error) {
 	var (
 		foundCapability bool
 		capability      *types.Capability
@@ -298,15 +315,25 @@ func GetCapabilityByName(ctx context.Context, c common.Args, capabilityName stri
 	}
 
 	if foundCapability {
-		dm, err := c.GetDiscoveryMapper()
-		if err != nil {
-			return nil, err
+		var refName string
+
+		// if workload type of ComponentDefinition is unclear,
+		// set the DefinitionReference's Name to AutoDetectWorkloadDefinition
+		if componentDef.Spec.Workload.Type == types.AutoDetectWorkloadDefinition {
+			refName = types.AutoDetectWorkloadDefinition
+		} else {
+			dm, err := c.GetDiscoveryMapper()
+			if err != nil {
+				return nil, err
+			}
+			ref, err := util.ConvertWorkloadGVK2Definition(dm, componentDef.Spec.Workload.Definition)
+			if err != nil {
+				return nil, err
+			}
+			refName = ref.Name
 		}
-		ref, err := util.ConvertWorkloadGVK2Definition(dm, componentDef.Spec.Workload.Definition)
-		if err != nil {
-			return nil, err
-		}
-		capability, err = GetCapabilityByComponentDefinitionObject(componentDef, ref.Name)
+
+		capability, err = GetCapabilityByComponentDefinitionObject(componentDef, refName)
 		if err != nil {
 			return nil, err
 		}
@@ -331,13 +358,35 @@ func GetCapabilityByName(ctx context.Context, c common.Args, capabilityName stri
 		}
 		return capability, nil
 	}
+
+	var wfStepDef v1beta1.WorkflowStepDefinition
+	err = newClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: capabilityName}, &wfStepDef)
+	if err == nil {
+		foundCapability = true
+	} else if kerrors.IsNotFound(err) {
+		err = newClient.Get(ctx, client.ObjectKey{Namespace: types.DefaultKubeVelaNS, Name: capabilityName}, &wfStepDef)
+		if err == nil {
+			foundCapability = true
+		}
+	}
+	if foundCapability {
+		capability, err = GetCapabilityByWorkflowStepDefinitionObject(wfStepDef, pd)
+		if err != nil {
+			return nil, err
+		}
+		return capability, nil
+	}
+
+	if ns == types.DefaultKubeVelaNS {
+		return nil, fmt.Errorf("could not find %s in namespace %s", capabilityName, ns)
+	}
 	return nil, fmt.Errorf("could not find %s in namespace %s, or %s", capabilityName, ns, types.DefaultKubeVelaNS)
 }
 
 // GetCapabilityByComponentDefinitionObject gets capability by ComponentDefinition object
 func GetCapabilityByComponentDefinitionObject(componentDef v1beta1.ComponentDefinition, referenceName string) (*types.Capability, error) {
-	capability, err := HandleDefinition(componentDef.Name, referenceName,
-		componentDef.Annotations, componentDef.Spec.Extension, types.TypeComponentDefinition, nil, componentDef.Spec.Schematic)
+	capability, err := HandleDefinition(componentDef.Name, referenceName, componentDef.Annotations, componentDef.Labels,
+		componentDef.Spec.Extension, types.TypeComponentDefinition, nil, componentDef.Spec.Schematic, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to handle ComponentDefinition")
 	}
@@ -351,11 +400,26 @@ func GetCapabilityByTraitDefinitionObject(traitDef v1beta1.TraitDefinition) (*ty
 		capability types.Capability
 		err        error
 	)
-	capability, err = HandleDefinition(traitDef.Name, traitDef.Spec.Reference.Name,
-		traitDef.Annotations, traitDef.Spec.Extension, types.TypeTrait, nil, traitDef.Spec.Schematic)
+	capability, err = HandleDefinition(traitDef.Name, traitDef.Spec.Reference.Name, traitDef.Annotations, traitDef.Labels,
+		traitDef.Spec.Extension, types.TypeTrait, nil, traitDef.Spec.Schematic, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to handle TraitDefinition")
 	}
 	capability.Namespace = traitDef.Namespace
+	return &capability, nil
+}
+
+// GetCapabilityByWorkflowStepDefinitionObject gets capability by WorkflowStepDefinition object
+func GetCapabilityByWorkflowStepDefinitionObject(wfStepDef v1beta1.WorkflowStepDefinition, pd *packages.PackageDiscover) (*types.Capability, error) {
+	var (
+		capability types.Capability
+		err        error
+	)
+	capability, err = HandleDefinition(wfStepDef.Name, wfStepDef.Spec.Reference.Name, wfStepDef.Annotations, wfStepDef.Labels,
+		nil, types.TypeWorkflowStep, nil, wfStepDef.Spec.Schematic, pd)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to handle WorkflowStepDefinition")
+	}
+	capability.Namespace = wfStepDef.Namespace
 	return &capability, nil
 }

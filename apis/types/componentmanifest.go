@@ -24,8 +24,10 @@ import (
 // ComponentManifest contains resources rendered from an application component.
 type ComponentManifest struct {
 	Name             string
+	Namespace        string
 	RevisionName     string
 	RevisionHash     string
+	ExternalRevision string
 	StandardWorkload *unstructured.Unstructured
 	Traits           []*unstructured.Unstructured
 	Scopes           []*corev1.ObjectReference

@@ -20,7 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -28,11 +28,11 @@ import (
 )
 
 func TestGenerateSchemaFromValues(t *testing.T) {
-	testValues, err := ioutil.ReadFile("./testdata/values.yaml")
+	testValues, err := os.ReadFile("./testdata/values.yaml")
 	if err != nil {
 		t.Error(err, "cannot load test data")
 	}
-	wantSchema, err := ioutil.ReadFile("./testdata/values.schema.json")
+	wantSchema, err := os.ReadFile("./testdata/values.schema.json")
 	if err != nil {
 		t.Error(err, "cannot load expected data")
 	}
@@ -53,8 +53,8 @@ func TestGenerateSchemaFromValues(t *testing.T) {
 }
 
 func TestGetChartValuesJSONSchema(t *testing.T) {
-	testHelm := testData("podinfo", "5.1.4", "http://oam.dev/catalog")
-	wantSchema, err := ioutil.ReadFile("./testdata/podinfo.values.schema.json")
+	testHelm := testData("podinfo", "5.1.4", "https://charts.kubevela.net/example", "testSecret")
+	wantSchema, err := os.ReadFile("./testdata/podinfo.values.schema.json")
 	if err != nil {
 		t.Error(err, "cannot load expected data")
 	}

@@ -18,217 +18,304 @@ package application
 
 import (
 	"context"
-	"fmt"
-	"time"
-
-	runtimev1alpha1 "github.com/crossplane/crossplane-runtime/apis/core/v1alpha1"
-
-	"github.com/pkg/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/klog/v2"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sync"
 
 	terraformtypes "github.com/oam-dev/terraform-controller/api/types"
 	terraformapi "github.com/oam-dev/terraform-controller/api/v1beta1"
+	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/common"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
 	"github.com/oam-dev/kubevela/apis/types"
 	"github.com/oam-dev/kubevela/pkg/appfile"
-	"github.com/oam-dev/kubevela/pkg/controller/core.oam.dev/v1alpha2/application/assemble"
-	"github.com/oam-dev/kubevela/pkg/controller/core.oam.dev/v1alpha2/application/dispatch"
-	"github.com/oam-dev/kubevela/pkg/controller/core.oam.dev/v1alpha2/applicationrollout"
-	"github.com/oam-dev/kubevela/pkg/controller/utils"
-	"github.com/oam-dev/kubevela/pkg/cue/process"
 	"github.com/oam-dev/kubevela/pkg/oam"
-	oamutil "github.com/oam-dev/kubevela/pkg/oam/util"
+
+	monitorContext "github.com/oam-dev/kubevela/pkg/monitor/context"
+	"github.com/oam-dev/kubevela/pkg/monitor/metrics"
+	"github.com/oam-dev/kubevela/pkg/multicluster"
+	"github.com/oam-dev/kubevela/pkg/resourcekeeper"
 )
 
-type appHandler struct {
+// AppHandler handles application reconcile
+type AppHandler struct {
 	r              *Reconciler
 	app            *v1beta1.Application
 	currentAppRev  *v1beta1.ApplicationRevision
 	latestAppRev   *v1beta1.ApplicationRevision
+	resourceKeeper resourcekeeper.ResourceKeeper
+
 	isNewRevision  bool
 	currentRevHash string
+
+	services         []common.ApplicationComponentStatus
+	appliedResources []common.ClusterObjectReference
+	deletedResources []common.ClusterObjectReference
+	parser           *appfile.Parser
+
+	mu sync.Mutex
 }
 
-func (h *appHandler) handleErr(err error) (ctrl.Result, error) {
-	nerr := h.r.UpdateStatus(context.Background(), h.app)
-	if err == nil && nerr == nil {
-		return ctrl.Result{}, nil
+// NewAppHandler create new app handler
+func NewAppHandler(ctx context.Context, r *Reconciler, app *v1beta1.Application, parser *appfile.Parser) (*AppHandler, error) {
+	if ctx, ok := ctx.(monitorContext.Context); ok {
+		subCtx := ctx.Fork("create-app-handler", monitorContext.DurationMetric(func(v float64) {
+			metrics.CreateAppHandlerDurationHistogram.WithLabelValues("application").Observe(v)
+		}))
+		defer subCtx.Commit("finish create appHandler")
 	}
-	if nerr != nil {
-		klog.InfoS("Failed to update application status", "err", nerr)
+	resourceHandler, err := resourcekeeper.NewResourceKeeper(ctx, r.Client, app)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create resourceKeeper")
 	}
-	return ctrl.Result{
-		RequeueAfter: time.Second * 10,
+	return &AppHandler{
+		r:              r,
+		app:            app,
+		resourceKeeper: resourceHandler,
+		parser:         parser,
 	}, nil
 }
 
-func (h *appHandler) applyAppManifests(ctx context.Context, comps []*types.ComponentManifest, policies []*unstructured.Unstructured) error {
-	appRev := h.currentAppRev
-	if h.app.Spec.Workflow != nil || h.app.Annotations[oam.AnnotationAppRevisionOnly] == "true" {
-		return h.createResourcesConfigMap(ctx, appRev, comps, policies)
+// Dispatch apply manifests into k8s.
+func (h *AppHandler) Dispatch(ctx context.Context, cluster string, owner common.ResourceCreatorRole, manifests ...*unstructured.Unstructured) error {
+	manifests = multicluster.ResourcesWithClusterName(cluster, manifests...)
+	if err := h.resourceKeeper.Dispatch(ctx, manifests); err != nil {
+		return err
 	}
-	if appWillRollout(h.app) {
-		return nil
-	}
-
-	var latestTracker *v1beta1.ResourceTracker
-	if h.app.Status.LatestRevision != nil {
-		latestTracker = &v1beta1.ResourceTracker{}
-		latestTracker.SetName(dispatch.ConstructResourceTrackerName(h.app.Status.LatestRevision.Name, h.app.Namespace))
-	}
-	// only do GC when ALL resources are dispatched successfully
-	// so skip GC while dispatching addon resources
-	d := dispatch.NewAppManifestsDispatcher(h.r.Client, appRev).StartAndSkipGC(latestTracker)
-	// dispatch packaged workload resources before dispatching assembled manifests
-	for _, comp := range comps {
-		if len(comp.PackagedWorkloadResources) != 0 {
-			if _, err := d.Dispatch(ctx, comp.PackagedWorkloadResources); err != nil {
-				return errors.WithMessage(err, "cannot dispatch packaged workload resources")
-			}
+	for _, mf := range manifests {
+		if mf == nil {
+			continue
 		}
-		if checkAutoDetectComponent(comp.StandardWorkload) {
-			return fmt.Errorf("helm mode component doesn't specify workload, the traits attached to the helm mode component will fail to work")
+		ref := common.ClusterObjectReference{
+			Cluster: cluster,
+			Creator: owner,
+			ObjectReference: corev1.ObjectReference{
+				Name:       mf.GetName(),
+				Namespace:  mf.GetNamespace(),
+				Kind:       mf.GetKind(),
+				APIVersion: mf.GetAPIVersion(),
+			},
 		}
-	}
-	a := assemble.NewAppManifests(appRev).WithWorkloadOption(assemble.DiscoveryHelmBasedWorkload(ctx, h.r.Client))
-	manifests, err := a.AssembledManifests()
-	if err != nil {
-		return errors.WithMessage(err, "cannot assemble application manifests")
-	}
-	if _, err := d.EndAndGC(latestTracker).Dispatch(ctx, manifests); err != nil {
-		return errors.WithMessage(err, "cannot dispatch application manifests")
+		h.addAppliedResource(false, ref)
 	}
 	return nil
 }
 
-// checkAutoDetectComponent will check if the standardWorkload is empty,
-// currently only Helm-based component is possible to be auto-detected
-// TODO implement auto-detect mechanism
-func checkAutoDetectComponent(wl *unstructured.Unstructured) bool {
-	return wl == nil || (len(wl.GetAPIVersion()) == 0 && len(wl.GetKind()) == 0)
+// Delete delete manifests from k8s.
+func (h *AppHandler) Delete(ctx context.Context, cluster string, owner common.ResourceCreatorRole, manifest *unstructured.Unstructured) error {
+	manifests := multicluster.ResourcesWithClusterName(cluster, manifest)
+	if err := h.resourceKeeper.Delete(ctx, manifests); err != nil {
+		return err
+	}
+	ref := common.ClusterObjectReference{
+		Cluster: cluster,
+		Creator: owner,
+		ObjectReference: corev1.ObjectReference{
+			Name:       manifest.GetName(),
+			Namespace:  manifest.GetNamespace(),
+			Kind:       manifest.GetKind(),
+			APIVersion: manifest.GetAPIVersion(),
+		},
+	}
+	h.deleteAppliedResource(ref)
+	return nil
 }
 
-func (h *appHandler) aggregateHealthStatus(appFile *appfile.Appfile) ([]common.ApplicationComponentStatus, bool, error) {
-	var appStatus []common.ApplicationComponentStatus
-	var healthy = true
-	for _, wl := range appFile.Workloads {
-		var status = common.ApplicationComponentStatus{
+// addAppliedResource recorde applied resource.
+// reconcile run at single threaded. So there is no need to consider to use locker.
+func (h *AppHandler) addAppliedResource(previous bool, refs ...common.ClusterObjectReference) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, ref := range refs {
+		if previous {
+			for i, deleted := range h.deletedResources {
+				if deleted.Equal(ref) {
+					h.deletedResources = removeResources(h.deletedResources, i)
+					return
+				}
+			}
+		}
+
+		found := false
+		for _, current := range h.appliedResources {
+			if current.Equal(ref) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			h.appliedResources = append(h.appliedResources, ref)
+		}
+	}
+}
+
+func (h *AppHandler) deleteAppliedResource(ref common.ClusterObjectReference) {
+	delIndex := -1
+	for i, current := range h.appliedResources {
+		if current.Equal(ref) {
+			delIndex = i
+		}
+	}
+	if delIndex < 0 {
+		isDeleted := false
+		for _, deleted := range h.deletedResources {
+			if deleted.Equal(ref) {
+				isDeleted = true
+				break
+			}
+		}
+		if !isDeleted {
+			h.deletedResources = append(h.deletedResources, ref)
+		}
+	} else {
+		h.appliedResources = removeResources(h.appliedResources, delIndex)
+	}
+
+}
+
+func removeResources(elements []common.ClusterObjectReference, index int) []common.ClusterObjectReference {
+	elements[index] = elements[len(elements)-1]
+	return elements[:len(elements)-1]
+}
+
+// addServiceStatus recorde the whole component status.
+// reconcile run at single threaded. So there is no need to consider to use locker.
+func (h *AppHandler) addServiceStatus(cover bool, svcs ...common.ApplicationComponentStatus) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, svc := range svcs {
+		found := false
+		for i := range h.services {
+			current := h.services[i]
+			if current.Name == svc.Name && current.Env == svc.Env && current.Namespace == svc.Namespace && current.Cluster == svc.Cluster {
+				if cover {
+					h.services[i] = svc
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			h.services = append(h.services, svc)
+		}
+	}
+}
+
+// ProduceArtifacts will produce Application artifacts that will be saved in configMap.
+func (h *AppHandler) ProduceArtifacts(ctx context.Context, comps []*types.ComponentManifest, policies []*unstructured.Unstructured) error {
+	return h.createResourcesConfigMap(ctx, h.currentAppRev, comps, policies)
+}
+
+func (h *AppHandler) collectHealthStatus(ctx context.Context, wl *appfile.Workload, appRev *v1beta1.ApplicationRevision, overrideNamespace string) (*common.ApplicationComponentStatus, bool, error) {
+	namespace := h.app.Namespace
+	if overrideNamespace != "" {
+		namespace = overrideNamespace
+	}
+
+	var (
+		status = common.ApplicationComponentStatus{
 			Name:               wl.Name,
 			WorkloadDefinition: wl.FullTemplate.Reference.Definition,
 			Healthy:            true,
+			Namespace:          namespace,
+			Cluster:            multicluster.ClusterNameInContext(ctx),
+		}
+		appName  = appRev.Spec.Application.Name
+		isHealth = true
+		err      error
+	)
+
+	if wl.CapabilityCategory == types.TerraformCategory {
+		var configuration terraformapi.Configuration
+		if err := h.r.Client.Get(ctx, client.ObjectKey{Name: wl.Name, Namespace: namespace}, &configuration); err != nil {
+			return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, check health error", appName, wl.Name)
 		}
 
-		var (
-			outputSecretName string
-			err              error
-			pCtx             process.Context
-		)
-
-		if wl.IsCloudResourceProducer() {
-			outputSecretName, err = appfile.GetOutputSecretNames(wl)
-			if err != nil {
-				return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, setting outputSecretName error", appFile.Name, wl.Name)
+		isLatest := func() bool {
+			if configuration.Status.ObservedGeneration != 0 {
+				if configuration.Status.ObservedGeneration != configuration.Generation {
+					return false
+				}
 			}
-			pCtx.InsertSecrets(outputSecretName, wl.RequiredSecrets)
+			// Use AppRevision to avoid getting the configuration before the patch.
+			if v, ok := configuration.GetLabels()[oam.LabelAppRevision]; ok {
+				if v != appRev.Name {
+					return false
+				}
+			}
+
+			return true
+		}
+		if !isLatest() || configuration.Status.Apply.State != terraformtypes.Available {
+			status.Healthy = false
+			isHealth = false
+		} else {
+			status.Healthy = true
+			isHealth = true
+		}
+		status.Message = configuration.Status.Apply.Message
+	} else {
+		if ok, err := wl.EvalHealth(wl.Ctx, h.r.Client, namespace); !ok || err != nil {
+			isHealth = false
+			status.Healthy = false
 		}
 
-		switch wl.CapabilityCategory {
-		case types.TerraformCategory:
-			pCtx = appfile.NewBasicContext(wl, appFile.Name, appFile.RevisionName, appFile.Namespace)
-			ctx := context.Background()
-			var configuration terraformapi.Configuration
-			if err := h.r.Client.Get(ctx, client.ObjectKey{Name: wl.Name, Namespace: h.app.Namespace}, &configuration); err != nil {
-				return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, check health error", appFile.Name, wl.Name)
-			}
-			if configuration.Status.State != terraformtypes.Available {
-				healthy = false
-				status.Healthy = false
-			} else {
-				status.Healthy = true
-			}
-			status.Message = configuration.Status.Message
-		default:
-			pCtx = process.NewContext(h.app.Namespace, wl.Name, appFile.Name, appFile.RevisionName)
-			if err := wl.EvalContext(pCtx); err != nil {
-				return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, evaluate context error", appFile.Name, wl.Name)
-			}
-			workloadHealth, err := wl.EvalHealth(pCtx, h.r, h.app.Namespace)
-			if err != nil {
-				return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, check health error", appFile.Name, wl.Name)
-			}
-			if !workloadHealth {
-				// TODO(wonderflow): we should add a custom way to let the template say why it's unhealthy, only a bool flag is not enough
-				status.Healthy = false
-				healthy = false
-			}
-
-			status.Message, err = wl.EvalStatus(pCtx, h.r, h.app.Namespace)
-			if err != nil {
-				return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, evaluate workload status message error", appFile.Name, wl.Name)
-			}
+		status.Message, err = wl.EvalStatus(wl.Ctx, h.r.Client, namespace)
+		if err != nil {
+			return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, evaluate workload status message error", appName, wl.Name)
 		}
-
-		var traitStatusList []common.ApplicationTraitStatus
-		for _, tr := range wl.Traits {
-			if err := tr.EvalContext(pCtx); err != nil {
-				return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, trait=%s, evaluate context error", appFile.Name, wl.Name, tr.Name)
-			}
-
-			var traitStatus = common.ApplicationTraitStatus{
-				Type:    tr.Name,
-				Healthy: true,
-			}
-			traitHealth, err := tr.EvalHealth(pCtx, h.r, h.app.Namespace)
-			if err != nil {
-				return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, trait=%s, check health error", appFile.Name, wl.Name, tr.Name)
-			}
-			if !traitHealth {
-				// TODO(wonderflow): we should add a custom way to let the template say why it's unhealthy, only a bool flag is not enough
-				traitStatus.Healthy = false
-				healthy = false
-			}
-			traitStatus.Message, err = tr.EvalStatus(pCtx, h.r, h.app.Namespace)
-			if err != nil {
-				return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, trait=%s, evaluate status message error", appFile.Name, wl.Name, tr.Name)
-			}
-			traitStatusList = append(traitStatusList, traitStatus)
-		}
-
-		status.Traits = traitStatusList
-		status.Scopes = generateScopeReference(wl.Scopes)
-		appStatus = append(appStatus, status)
 	}
-	return appStatus, healthy, nil
+
+	var traitStatusList []common.ApplicationTraitStatus
+	for _, tr := range wl.Traits {
+		var traitStatus = common.ApplicationTraitStatus{
+			Type:    tr.Name,
+			Healthy: true,
+		}
+		if ok, err := tr.EvalHealth(wl.Ctx, h.r.Client, namespace); !ok || err != nil {
+			isHealth = false
+			traitStatus.Healthy = false
+		}
+		traitStatus.Message, err = tr.EvalStatus(wl.Ctx, h.r.Client, namespace)
+		if err != nil {
+			return nil, false, errors.WithMessagef(err, "app=%s, comp=%s, trait=%s, evaluate status message error", appName, wl.Name, tr.Name)
+		}
+		traitStatusList = append(traitStatusList, traitStatus)
+	}
+
+	status.Traits = traitStatusList
+	status.Scopes = generateScopeReference(wl.Scopes)
+	h.addServiceStatus(true, status)
+	return &status, isHealth, nil
 }
 
-func generateScopeReference(scopes []appfile.Scope) []runtimev1alpha1.TypedReference {
-	var references []runtimev1alpha1.TypedReference
+func generateScopeReference(scopes []appfile.Scope) []corev1.ObjectReference {
+	var references []corev1.ObjectReference
 	for _, scope := range scopes {
-		references = append(references, runtimev1alpha1.TypedReference{
-			APIVersion: scope.GVK.GroupVersion().String(),
-			Kind:       scope.GVK.Kind,
-			Name:       scope.Name,
+		references = append(references, corev1.ObjectReference{
+			APIVersion: metav1.GroupVersion{
+				Group:   scope.GVK.Group,
+				Version: scope.GVK.Version,
+			}.String(),
+			Kind: scope.GVK.Kind,
+			Name: scope.Name,
 		})
 	}
 	return references
 }
 
-type garbageCollectFunc func(ctx context.Context, h *appHandler) error
+type garbageCollectFunc func(ctx context.Context, h *AppHandler) error
 
 // execute garbage collection functions, including:
 // - clean up legacy app revisions
 // - clean up legacy component revisions
-func garbageCollection(ctx context.Context, h *appHandler) error {
+func garbageCollection(ctx context.Context, h *AppHandler) error {
 	collectFuncs := []garbageCollectFunc{
 		garbageCollectFunc(cleanUpApplicationRevision),
-		garbageCollectFunc(cleanUpComponentRevision),
+		garbageCollectFunc(cleanUpWorkflowComponentRevision),
 	}
 	for _, collectFunc := range collectFuncs {
 		if err := collectFunc(ctx, h); err != nil {
@@ -236,47 +323,4 @@ func garbageCollection(ctx context.Context, h *appHandler) error {
 		}
 	}
 	return nil
-}
-
-func (h *appHandler) handleRollout(ctx context.Context) (reconcile.Result, error) {
-	var comps []string
-	for _, component := range h.app.Spec.Components {
-		comps = append(comps, component.Name)
-	}
-
-	// targetRevision should always points to LatestRevison
-	targetRevision := h.app.Status.LatestRevision.Name
-	var srcRevision string
-	target, _ := oamutil.ExtractRevisionNum(targetRevision, "-")
-	// if target == 1 this is a initial scale operation, sourceRevision should be empty
-	// otherwise source revision always is targetRevision - 1
-	if target > 1 {
-		srcRevision = utils.ConstructRevisionName(h.app.Name, int64(target-1))
-	}
-
-	appRollout := v1beta1.AppRollout{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      h.app.Name,
-			Namespace: h.app.Namespace,
-			UID:       h.app.UID,
-		},
-		Spec: v1beta1.AppRolloutSpec{
-			SourceAppRevisionName: srcRevision,
-			TargetAppRevisionName: targetRevision,
-			ComponentList:         comps,
-			RolloutPlan:           *h.app.Spec.RolloutPlan,
-		},
-		Status: h.app.Status.Rollout,
-	}
-
-	// construct a fake rollout object and call rollout.DoReconcile
-	r := applicationrollout.NewReconciler(h.r.Client, h.r.dm, h.r.Recorder, h.r.Scheme)
-	res, err := r.DoReconcile(ctx, &appRollout)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-
-	// write back rollout status to application
-	h.app.Status.Rollout = appRollout.Status
-	return res, nil
 }

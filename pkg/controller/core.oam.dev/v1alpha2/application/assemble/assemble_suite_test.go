@@ -17,24 +17,18 @@ limitations under the License.
 package assemble
 
 import (
-	"io/ioutil"
-	"testing"
-
-	"github.com/ghodss/yaml"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
-	"github.com/oam-dev/kubevela/pkg/oam"
+	"os"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-)
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
 
-func TestAssemble(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Assemble Suite")
-}
+	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
+	velatypes "github.com/oam-dev/kubevela/apis/types"
+	"github.com/oam-dev/kubevela/pkg/oam"
+)
 
 var _ = Describe("Test Assemble Options", func() {
 	It("test assemble", func() {
@@ -44,7 +38,7 @@ var _ = Describe("Test Assemble Options", func() {
 		)
 
 		appRev := &v1beta1.ApplicationRevision{}
-		b, err := ioutil.ReadFile("./testdata/apprevision.yaml")
+		b, err := os.ReadFile("./testdata/apprevision.yaml")
 		/* appRevision test data is generated based on below application
 		apiVersion: core.oam.dev/v1beta1
 		kind: Application
@@ -71,7 +65,7 @@ var _ = Describe("Test Assemble Options", func() {
 		err = yaml.Unmarshal(b, appRev)
 		Expect(err).Should(BeNil())
 
-		ao := NewAppManifests(appRev)
+		ao := NewAppManifests(appRev, appParser)
 		workloads, traits, _, err := ao.GroupAssembledManifests()
 		Expect(err).Should(BeNil())
 
@@ -154,10 +148,14 @@ var _ = Describe("Test Assemble Options", func() {
 
 	It("test annotation and label filter", func() {
 		var (
-			compName = "frontend"
+			compName     = "frontend"
+			workloadName = "test-workload"
 		)
 		appRev := &v1beta1.ApplicationRevision{}
-		b, err := ioutil.ReadFile("./testdata/filter_annotations.yaml")
+		b, err := os.ReadFile("./testdata/filter_annotations.yaml")
+		Expect(err).Should(BeNil())
+		err = yaml.Unmarshal(b, appRev)
+		Expect(err).Should(BeNil())
 		getKeys := func(m map[string]string) []string {
 			var keys []string
 			for k := range m {
@@ -186,11 +184,7 @@ var _ = Describe("Test Assemble Options", func() {
 			        image: nginx
 		*/
 
-		Expect(err).Should(BeNil())
-		err = yaml.Unmarshal(b, appRev)
-		Expect(err).Should(BeNil())
-
-		ao := NewAppManifests(appRev)
+		ao := NewAppManifests(appRev, appParser)
 		workloads, _, _, err := ao.GroupAssembledManifests()
 		Expect(err).Should(BeNil())
 
@@ -205,5 +199,54 @@ var _ = Describe("Test Assemble Options", func() {
 		annotationKeys := getKeys(wl.GetAnnotations())
 		Expect(annotationKeys).ShouldNot(ContainElements("notPassAnno1", "notPassAnno2"))
 		Expect(annotationKeys).Should(ContainElements("canPassAnno"))
+
+		By("Verify workload metadata (name)")
+		Expect(wl.GetName()).Should(Equal(workloadName))
+	})
+})
+
+var _ = Describe("Test handleCheckManageWorkloadTrait func", func() {
+	It("Test every situation", func() {
+		traitDefs := map[string]v1beta1.TraitDefinition{
+			"rollout": v1beta1.TraitDefinition{
+				Spec: v1beta1.TraitDefinitionSpec{
+					ManageWorkload: true,
+				},
+			},
+			"normal": v1beta1.TraitDefinition{
+				Spec: v1beta1.TraitDefinitionSpec{},
+			},
+		}
+		appRev := v1beta1.ApplicationRevision{
+			Spec: v1beta1.ApplicationRevisionSpec{
+				TraitDefinitions: traitDefs,
+			},
+		}
+		rolloutTrait := &unstructured.Unstructured{}
+		rolloutTrait.SetLabels(map[string]string{oam.TraitTypeLabel: "rollout"})
+
+		normalTrait := &unstructured.Unstructured{}
+		normalTrait.SetLabels(map[string]string{oam.TraitTypeLabel: "normal"})
+
+		workload := unstructured.Unstructured{}
+		workload.SetLabels(map[string]string{
+			oam.WorkloadTypeLabel: "webservice",
+		})
+
+		comps := []*velatypes.ComponentManifest{
+			{
+				Traits: []*unstructured.Unstructured{
+					rolloutTrait,
+					normalTrait,
+				},
+				StandardWorkload: &workload,
+			},
+		}
+
+		HandleCheckManageWorkloadTrait(appRev, comps)
+		Expect(len(rolloutTrait.GetLabels())).Should(BeEquivalentTo(2))
+		Expect(rolloutTrait.GetLabels()[oam.LabelManageWorkloadTrait]).Should(BeEquivalentTo("true"))
+		Expect(len(normalTrait.GetLabels())).Should(BeEquivalentTo(1))
+		Expect(normalTrait.GetLabels()[oam.LabelManageWorkloadTrait]).Should(BeEquivalentTo(""))
 	})
 })

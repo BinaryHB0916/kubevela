@@ -26,9 +26,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"time"
 
-	cpv1alpha1 "github.com/crossplane/crossplane-runtime/apis/core/v1alpha1"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
@@ -41,14 +39,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/common"
+	"github.com/oam-dev/kubevela/apis/core.oam.dev/condition"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1alpha2"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
-	oamtypes "github.com/oam-dev/kubevela/apis/types"
 	"github.com/oam-dev/kubevela/pkg/oam"
 	"github.com/oam-dev/kubevela/pkg/oam/discoverymapper"
 )
@@ -58,8 +56,6 @@ var (
 	KindDeployment = reflect.TypeOf(appsv1.Deployment{}).Name()
 	// KindService is the k8s Service kind.
 	KindService = reflect.TypeOf(corev1.Service{}).Name()
-	// ReconcileWaitResult is the time to wait between reconciliation.
-	ReconcileWaitResult = reconcile.Result{RequeueAfter: 30 * time.Second}
 )
 
 const (
@@ -77,6 +73,8 @@ const (
 )
 
 const (
+	// ErrReconcileErrInCondition indicates one or more error occurs and are recorded in status conditions
+	ErrReconcileErrInCondition = "object level reconcile error, type: %q, msg: %q"
 	// ErrUpdateStatus is the error while applying status.
 	ErrUpdateStatus = "cannot apply status"
 	// ErrLocateAppConfig is the error while locating parent application.
@@ -102,6 +100,8 @@ const (
 	ErrUpdateComponentDefinition = "cannot update ComponentDefinition %s: %v"
 	// ErrUpdateTraitDefinition is the error while update TraitDefinition
 	ErrUpdateTraitDefinition = "cannot update TraitDefinition %s: %v"
+	// ErrUpdateStepDefinition is the error while update WorkflowStepDefinition
+	ErrUpdateStepDefinition = "cannot update WorkflowStepDefinition %s: %v"
 	// ErrUpdatePolicyDefinition is the error while update PolicyDefinition
 	ErrUpdatePolicyDefinition = "cannot update PolicyDefinition %s: %v"
 	// ErrUpdateWorkflowStepDefinition is the error while update WorkflowStepDefinition
@@ -115,8 +115,8 @@ const (
 
 	// ErrGenerateDefinitionRevision is the error while generate DefinitionRevision
 	ErrGenerateDefinitionRevision = "cannot generate DefinitionRevision of %s: %v"
-	// ErrCreateOrUpdateDefinitionRevision is the error while create or update DefinitionRevision
-	ErrCreateOrUpdateDefinitionRevision = "cannot create or update DefinitionRevision %s: %v"
+	// ErrCreateDefinitionRevision is the error while create or update DefinitionRevision
+	ErrCreateDefinitionRevision = "cannot create DefinitionRevision %s: %v"
 )
 
 // WorkloadType describe the workload type of ComponentDefinition
@@ -146,15 +146,22 @@ const (
 	AppDefinitionNamespace namespaceContextKey = iota
 )
 
+type serviceAccountContextKey int
+
+const (
+	// ServiceAccountContextKey is the context key to define the service account for the app
+	ServiceAccountContextKey serviceAccountContextKey = iota
+)
+
 // A ConditionedObject is an Object type with condition field
 type ConditionedObject interface {
-	oam.Object
+	client.Object
 
 	oam.Conditioned
 }
 
-// ErrBadRevisionName represents an error when the revision name is not standardized
-var ErrBadRevisionName = fmt.Errorf("bad revision name")
+// ErrBadRevision represents an error when the revision name is not standardized
+const ErrBadRevision = "bad revision name"
 
 // LocateParentAppConfig locate the parent application configuration object
 func LocateParentAppConfig(ctx context.Context, client client.Client, oamObject oam.Object) (oam.Object, error) {
@@ -167,20 +174,6 @@ func LocateParentAppConfig(ctx context.Context, client client.Client, oamObject 
 			if len(acName) > 0 {
 				nn := types.NamespacedName{
 					Name:      acName,
-					Namespace: oamObject.GetNamespace(),
-				}
-				if err := client.Get(ctx, nn, eventObj); err != nil {
-					return nil, err
-				}
-				return eventObj, nil
-			}
-		}
-		if o.Kind == v1alpha2.ApplicationContextKind {
-			var eventObj = &v1alpha2.ApplicationContext{}
-			appName := o.Name
-			if len(appName) > 0 {
-				nn := types.NamespacedName{
-					Name:      appName,
 					Namespace: oamObject.GetNamespace(),
 				}
 				if err := client.Get(ctx, nn, eventObj); err != nil {
@@ -314,8 +307,28 @@ func SetNamespaceInCtx(ctx context.Context, namespace string) context.Context {
 	return ctx
 }
 
+// GetServiceAccountInContext returns the name of the service account which reconciles the app from the context.
+func GetServiceAccountInContext(ctx context.Context) string {
+	if serviceAccount, ok := ctx.Value(ServiceAccountContextKey).(string); ok {
+		return serviceAccount
+	}
+	return ""
+}
+
+// SetServiceAccountInContext sets the name of the service account which reconciles the app.
+func SetServiceAccountInContext(ctx context.Context, namespace, name string) context.Context {
+	if name == "" {
+		// We may set `default` service account when the service account name is omitted.
+		// However, setting `default` service account will break existing cluster-scoped applications,
+		// so it would be better to give users a migration term.
+		// TODO(devholic): Use `default` service account if omitted.
+		return ctx
+	}
+	return context.WithValue(ctx, ServiceAccountContextKey, fmt.Sprintf("system:serviceaccount:%s:%s", namespace, name))
+}
+
 // GetDefinition get definition from two level namespace
-func GetDefinition(ctx context.Context, cli client.Reader, definition runtime.Object, definitionName string) error {
+func GetDefinition(ctx context.Context, cli client.Reader, definition client.Object, definitionName string) error {
 	if dns := os.Getenv(DefinitionNamespaceEnv); dns != "" {
 		if err := cli.Get(ctx, types.NamespacedName{Name: definitionName, Namespace: dns}, definition); err == nil {
 			return nil
@@ -345,7 +358,7 @@ func GetDefinition(ctx context.Context, cli client.Reader, definition runtime.Ob
 }
 
 // GetCapabilityDefinition can get different versions of ComponentDefinition/TraitDefinition
-func GetCapabilityDefinition(ctx context.Context, cli client.Reader, definition runtime.Object,
+func GetCapabilityDefinition(ctx context.Context, cli client.Reader, definition client.Object,
 	definitionName string) error {
 	isLatestRevision, defRev, err := fetchDefinitionRev(ctx, cli, definitionName)
 	if err != nil {
@@ -369,32 +382,42 @@ func GetCapabilityDefinition(ctx context.Context, cli client.Reader, definition 
 }
 
 func fetchDefinitionRev(ctx context.Context, cli client.Reader, definitionName string) (bool, *v1beta1.DefinitionRevision, error) {
+	// if the component's type doesn't contain '@' means user want to use the latest Definition.
+	if !strings.Contains(definitionName, "@") {
+		return true, nil, nil
+	}
+
 	defRevName, err := ConvertDefinitionRevName(definitionName)
 	if err != nil {
-		if errors.As(err, &ErrBadRevisionName) {
-			return true, nil, nil
-		}
 		return false, nil, err
 	}
 	defRev := new(v1beta1.DefinitionRevision)
-	if err = GetDefinition(ctx, cli, defRev, defRevName); err != nil {
+	if err := GetDefinition(ctx, cli, defRev, defRevName); err != nil {
 		return false, nil, err
 	}
-	return false, defRev, err
+	return false, defRev, nil
 }
 
 // ConvertDefinitionRevName can help convert definition type defined in Application to DefinitionRevision Name
-// e.g., worker@v2 will be convert to worker-v2
+// e.g., worker@v1.3.1 will be convert to worker-v1.3.1
 func ConvertDefinitionRevName(definitionName string) (string, error) {
-	revNum, err := ExtractRevisionNum(definitionName, "@")
-	if err != nil {
-		return "", err
+	splits := strings.Split(definitionName, "@v")
+	if len(splits) == 1 || len(splits[0]) == 0 {
+		errs := validation.IsQualifiedName(definitionName)
+		if len(errs) != 0 {
+			return definitionName, errors.Errorf("invalid definitionRevision name %s:%s", definitionName, strings.Join(errs, ","))
+		}
+		return definitionName, nil
 	}
-	defName := strings.TrimSuffix(definitionName, fmt.Sprintf("@v%d", revNum))
-	if defName == "" {
-		return "", fmt.Errorf("invalid definition defName %s", definitionName)
+
+	defName := splits[0]
+	revisionName := strings.TrimPrefix(definitionName, fmt.Sprintf("%s@v", defName))
+	defRevName := fmt.Sprintf("%s-v%s", defName, revisionName)
+	errs := validation.IsQualifiedName(defRevName)
+	if len(errs) != 0 {
+		return defRevName, errors.Errorf("invalid definitionRevision name %s:%s", defName, strings.Join(errs, ","))
 	}
-	return fmt.Sprintf("%s-v%d", defName, revNum), nil
+	return defRevName, nil
 }
 
 // when get a  namespaced scope object without namespace, would get an error request namespace
@@ -449,10 +472,64 @@ func fetchChildResources(ctx context.Context, r client.Reader, workload *unstruc
 	return childResources, nil
 }
 
-// PatchCondition condition for a conditioned object
+// EndReconcileWithNegativeCondition is used to handle reconcile failure for a conditioned resource.
+// It will make ctrl-mgr to requeue the resource through patching changed conditions or returning
+// an error.
+// It should not handle reconcile success with positive conditions, otherwise it will trigger
+// infinite requeue.
+func EndReconcileWithNegativeCondition(ctx context.Context, r client.StatusClient, workload ConditionedObject,
+	condition ...condition.Condition) error {
+	if len(condition) == 0 {
+		return nil
+	}
+	workloadPatch := client.MergeFrom(workload.DeepCopyObject().(client.Object))
+	conditionIsChanged := IsConditionChanged(condition, workload)
+	workload.SetConditions(condition...)
+	if err := r.Status().Patch(ctx, workload, workloadPatch, client.FieldOwner(workload.GetUID())); err != nil {
+		return errors.Wrap(err, ErrUpdateStatus)
+	}
+	if conditionIsChanged {
+		// if any condition is changed, patching status can trigger requeue the resource and we should return nil to
+		// avoid requeue it again
+		return nil
+	}
+	// if no condition is changed, patching status can not trigger requeue, so we must return an error to
+	// requeue the resource
+	return errors.Errorf(ErrReconcileErrInCondition, condition[0].Type, condition[0].Message)
+}
+
+// PatchCondition will patch status with condition and return, it generally used by cases which don't want reconcile after patch
 func PatchCondition(ctx context.Context, r client.StatusClient, workload ConditionedObject,
-	condition ...cpv1alpha1.Condition) error {
-	workloadPatch := client.MergeFrom(workload.DeepCopyObject())
+	condition ...condition.Condition) error {
+	if len(condition) == 0 {
+		return nil
+	}
+	workloadPatch := client.MergeFrom(workload.DeepCopyObject().(client.Object))
+	workload.SetConditions(condition...)
+	return r.Status().Patch(ctx, workload, workloadPatch, client.FieldOwner(workload.GetUID()))
+}
+
+// IsConditionChanged will check if conditions in workload is changed compare to newCondition
+func IsConditionChanged(newCondition []condition.Condition, workload ConditionedObject) bool {
+	var conditionIsChanged bool
+	for _, newCond := range newCondition {
+		// NOTE(roywang) an implicit rule here: condition type is unique in an object's conditions
+		// if this rule is changed in the future, we must revise below logic correspondingly
+		existingCond := workload.GetCondition(newCond.Type)
+
+		if !existingCond.Equal(newCond) {
+			conditionIsChanged = true
+			break
+		}
+	}
+	return conditionIsChanged
+}
+
+// EndReconcileWithPositiveCondition is used to handle reconcile success for a conditioned resource.
+// It should only accept positive condition which means no need to requeue the resource.
+func EndReconcileWithPositiveCondition(ctx context.Context, r client.StatusClient, workload ConditionedObject,
+	condition ...condition.Condition) error {
+	workloadPatch := client.MergeFrom(workload.DeepCopyObject().(client.Object))
 	workload.SetConditions(condition...)
 	return errors.Wrap(
 		r.Status().Patch(ctx, workload, workloadPatch, client.FieldOwner(workload.GetUID())),
@@ -524,13 +601,13 @@ func GetDefinitionName(dm discoverymapper.DiscoveryMapper, u *unstructured.Unstr
 }
 
 // GetGVKFromDefinition help get Group Version Kind from DefinitionReference
-func GetGVKFromDefinition(dm discoverymapper.DiscoveryMapper, definitionRef common.DefinitionReference) (schema.GroupVersionKind, error) {
+func GetGVKFromDefinition(dm discoverymapper.DiscoveryMapper, definitionRef common.DefinitionReference) (metav1.GroupVersionKind, error) {
 	// if given definitionRef is empty or it's a dummy definition, return an empty GVK
 	// NOTE currently, only TraitDefinition is allowed to omit definitionRef conditionally.
 	if len(definitionRef.Name) < 1 || definitionRef.Name == Dummy {
-		return schema.EmptyObjectKind.GroupVersionKind(), nil
+		return metav1.GroupVersionKind{}, nil
 	}
-	var gvk schema.GroupVersionKind
+	var gvk metav1.GroupVersionKind
 	groupResource := schema.ParseGroupResource(definitionRef.Name)
 	gvr := schema.GroupVersionResource{Group: groupResource.Group, Resource: groupResource.Resource, Version: definitionRef.Version}
 	kinds, err := dm.KindsFor(gvr)
@@ -542,7 +619,11 @@ func GetGVKFromDefinition(dm discoverymapper.DiscoveryMapper, definitionRef comm
 			PartialResource: gvr,
 		}
 	}
-	return kinds[0], nil
+	return metav1.GroupVersionKind{
+		Group:   kinds[0].Group,
+		Kind:    kinds[0].Kind,
+		Version: kinds[0].Version,
+	}, nil
 }
 
 // ConvertWorkloadGVK2Definition help convert a GVK to DefinitionReference
@@ -647,65 +728,20 @@ func RawExtension2Component(raw runtime.RawExtension) (*v1alpha2.Component, erro
 	return c, nil
 }
 
-// AppConfig2ComponentManifests convert AppConfig and Components to a slice of ComponentManifest.
-func AppConfig2ComponentManifests(acRaw runtime.RawExtension, comps []common.RawComponent) ([]*oamtypes.ComponentManifest, error) {
-	var err error
-	ac, err := RawExtension2AppConfig(acRaw)
+// RawExtension2Application converts runtime.RawExtension to Application
+func RawExtension2Application(raw runtime.RawExtension) (*v1beta1.Application, error) {
+	a := &v1beta1.Application{}
+	b, err := raw.MarshalJSON()
 	if err != nil {
 		return nil, err
 	}
-	cms := make([]*oamtypes.ComponentManifest, len(ac.Spec.Components))
-	for i, acc := range ac.Spec.Components {
-		cm := &oamtypes.ComponentManifest{
-			Name:         acc.ComponentName,
-			RevisionName: acc.RevisionName,
-		}
-		if acc.ComponentName == "" && acc.RevisionName != "" {
-			cm.Name = ExtractComponentName(acc.RevisionName)
-		}
-		for _, compRaw := range comps {
-			comp, err := RawExtension2Component(compRaw.Raw)
-			if err != nil {
-				return nil, err
-			}
-			cm.RevisionHash = comp.GetLabels()[oam.LabelComponentRevisionHash]
-			if comp.Name == cm.Name {
-				cm.StandardWorkload, err = RawExtension2Unstructured(&comp.Spec.Workload)
-				if err != nil {
-					return nil, err
-				}
-				if comp.Spec.Helm != nil {
-					rls, err := RawExtension2Unstructured(&comp.Spec.Helm.Release)
-					if err != nil {
-						return nil, err
-					}
-					repo, err := RawExtension2Unstructured(&comp.Spec.Helm.Repository)
-					if err != nil {
-						return nil, err
-					}
-					cm.PackagedWorkloadResources = []*unstructured.Unstructured{rls, repo}
-				}
-				break
-			}
-		}
-		cm.Traits = make([]*unstructured.Unstructured, len(acc.Traits))
-		for j, t := range acc.Traits {
-			cm.Traits[j], err = RawExtension2Unstructured(&t.Trait)
-			if err != nil {
-				return nil, err
-			}
-		}
-		cm.Scopes = make([]*corev1.ObjectReference, len(acc.Scopes))
-		for x, s := range acc.Scopes {
-			cm.Scopes[x] = &corev1.ObjectReference{
-				Kind:       s.ScopeReference.Kind,
-				Name:       s.ScopeReference.Name,
-				APIVersion: s.ScopeReference.APIVersion,
-			}
-		}
-		cms[i] = cm
+	if err := json.Unmarshal(b, a); err != nil {
+		return nil, err
 	}
-	return cms, nil
+	if len(a.GetNamespace()) == 0 {
+		a.SetNamespace("default")
+	}
+	return a, nil
 }
 
 // Object2Map turn the Object to a map
@@ -720,9 +756,9 @@ func Object2Map(obj interface{}) (map[string]interface{}, error) {
 }
 
 // Object2RawExtension converts an object to a rawExtension
-func Object2RawExtension(obj interface{}) runtime.RawExtension {
+func Object2RawExtension(obj interface{}) *runtime.RawExtension {
 	bts := MustJSONMarshal(obj)
-	return runtime.RawExtension{
+	return &runtime.RawExtension{
 		Raw: bts,
 	}
 }
@@ -767,7 +803,7 @@ func GenTraitName(componentName string, ct *v1alpha2.ComponentTrait, traitType s
 // compatibility
 func GenTraitNameCompatible(componentName string, trait *unstructured.Unstructured, traitType string) string {
 	ct := &v1alpha2.ComponentTrait{
-		Trait: Object2RawExtension(trait),
+		Trait: *Object2RawExtension(trait),
 	}
 	return GenTraitName(componentName, ct, traitType)
 }
@@ -897,11 +933,11 @@ func ExtractRevisionNum(appRevision string, delimiter string) (int, error) {
 	splits := strings.Split(appRevision, delimiter)
 	// check some bad appRevision name, eg:v1, appv2
 	if len(splits) == 1 {
-		return 0, ErrBadRevisionName
+		return 0, errors.New(ErrBadRevision)
 	}
 	// check some bad appRevision name, eg:myapp-a1
 	if !strings.HasPrefix(splits[len(splits)-1], "v") {
-		return 0, ErrBadRevisionName
+		return 0, errors.New(ErrBadRevision)
 	}
 	return strconv.Atoi(strings.TrimPrefix(splits[len(splits)-1], "v"))
 }
@@ -928,4 +964,23 @@ func Abs(a int) int {
 		return -a
 	}
 	return a
+}
+
+// AsOwner converts the supplied object reference to an owner reference.
+func AsOwner(r *corev1.ObjectReference) metav1.OwnerReference {
+	return metav1.OwnerReference{
+		APIVersion: r.APIVersion,
+		Kind:       r.Kind,
+		Name:       r.Name,
+		UID:        r.UID,
+	}
+}
+
+// AsController converts the supplied object reference to a controller
+// reference. You may also consider using metav1.NewControllerRef.
+func AsController(r *corev1.ObjectReference) metav1.OwnerReference {
+	c := true
+	ref := AsOwner(r)
+	ref.Controller = &c
+	return ref
 }

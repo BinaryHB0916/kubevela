@@ -17,38 +17,27 @@
 package v1beta1
 
 import (
+	"encoding/json"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/common"
-	"github.com/oam-dev/kubevela/apis/standard.oam.dev/v1alpha1"
+	"github.com/oam-dev/kubevela/apis/core.oam.dev/condition"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+const (
+	// TypeHealthy application are believed to be determined as healthy by a health scope.
+	TypeHealthy condition.ConditionType = "Healthy"
+)
 
-// ApplicationTrait defines the trait of application
-type ApplicationTrait struct {
-	Type string `json:"type"`
-	// +kubebuilder:pruning:PreserveUnknownFields
-	Properties runtime.RawExtension `json:"properties,omitempty"`
-}
-
-// ApplicationComponent describe the component of application
-type ApplicationComponent struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	// +kubebuilder:pruning:PreserveUnknownFields
-	Properties runtime.RawExtension `json:"properties,omitempty"`
-
-	// Traits define the trait of one component, the type must be array to keep the order.
-	Traits []ApplicationTrait `json:"traits,omitempty"`
-
-	// +kubebuilder:pruning:PreserveUnknownFields
-	// scopes in ApplicationComponent defines the component-level scopes
-	// the format is <scope-type:scope-instance-name> pairs, the key represents type of `ScopeDefinition` while the value represent the name of scope instance.
-	Scopes map[string]string `json:"scopes,omitempty"`
-}
+// Reasons an application is or is not healthy
+const (
+	ReasonHealthy        condition.ConditionReason = "AllComponentsHealthy"
+	ReasonUnhealthy      condition.ConditionReason = "UnhealthyOrUnknownComponents"
+	ReasonHealthCheckErr condition.ConditionReason = "HealthCheckeError"
+)
 
 // AppPolicy defines a global policy for all components in the app.
 type AppPolicy struct {
@@ -57,7 +46,7 @@ type AppPolicy struct {
 
 	Type string `json:"type"`
 	// +kubebuilder:pruning:PreserveUnknownFields
-	Properties runtime.RawExtension `json:"properties,omitempty"`
+	Properties *runtime.RawExtension `json:"properties,omitempty"`
 }
 
 // WorkflowStep defines how to execute a workflow step.
@@ -68,12 +57,24 @@ type WorkflowStep struct {
 	Type string `json:"type"`
 
 	// +kubebuilder:pruning:PreserveUnknownFields
-	Properties runtime.RawExtension `json:"properties,omitempty"`
+	Properties *runtime.RawExtension `json:"properties,omitempty"`
+
+	DependsOn []string `json:"dependsOn,omitempty"`
+
+	Inputs common.StepInputs `json:"inputs,omitempty"`
+
+	Outputs common.StepOutputs `json:"outputs,omitempty"`
+}
+
+// Workflow defines workflow steps and other attributes
+type Workflow struct {
+	Ref   string         `json:"ref,omitempty"`
+	Steps []WorkflowStep `json:"steps,omitempty"`
 }
 
 // ApplicationSpec is the spec of Application
 type ApplicationSpec struct {
-	Components []ApplicationComponent `json:"components"`
+	Components []common.ApplicationComponent `json:"components"`
 
 	// Policies defines the global policies for all components in the app, e.g. security, metrics, gitops,
 	// multi-cluster placement rules, etc.
@@ -85,14 +86,9 @@ type ApplicationSpec struct {
 	// Workflow steps are executed in array order, and each step:
 	// - will have a context in annotation.
 	// - should mark "finish" phase in status.conditions.
-	Workflow []WorkflowStep `json:"workflow,omitempty"`
+	Workflow *Workflow `json:"workflow,omitempty"`
 
 	// TODO(wonderflow): we should have application level scopes supported here
-
-	// RolloutPlan is the details on how to rollout the resources
-	// The controller simply replace the old resources with the new one if there is no rollout plan involved
-	// +optional
-	RolloutPlan *v1alpha1.RolloutPlan `json:"rolloutPlan,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -107,6 +103,8 @@ type ApplicationSpec struct {
 // +kubebuilder:printcolumn:name="HEALTHY",type=boolean,JSONPath=`.status.services[*].healthy`
 // +kubebuilder:printcolumn:name="STATUS",type=string,JSONPath=`.status.services[*].message`
 // +kubebuilder:printcolumn:name="AGE",type=date,JSONPath=".metadata.creationTimestamp"
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type Application struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -118,18 +116,62 @@ type Application struct {
 // +kubebuilder:object:root=true
 
 // ApplicationList contains a list of Application
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type ApplicationList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Application `json:"items"`
 }
 
+// SetConditions set condition to application
+func (app *Application) SetConditions(c ...condition.Condition) {
+	app.Status.SetConditions(c...)
+}
+
+// GetCondition get condition by given condition type
+func (app *Application) GetCondition(t condition.ConditionType) condition.Condition {
+	return app.Status.GetCondition(t)
+}
+
 // GetComponent get the component from the application based on its workload type
-func (app *Application) GetComponent(workloadType string) *ApplicationComponent {
+func (app *Application) GetComponent(workloadType string) *common.ApplicationComponent {
 	for _, c := range app.Spec.Components {
 		if c.Type == workloadType {
 			return &c
 		}
 	}
 	return nil
+}
+
+// Unstructured convert application to unstructured.Unstructured.
+func (app *Application) Unstructured() (*unstructured.Unstructured, error) {
+	var obj = &unstructured.Unstructured{}
+	app.SetGroupVersionKind(ApplicationKindVersionKind)
+	bt, err := json.Marshal(app)
+	if err != nil {
+		return nil, err
+	}
+	if err := obj.UnmarshalJSON(bt); err != nil {
+		return nil, err
+	}
+
+	if app.Status.Services == nil {
+		if err := unstructured.SetNestedSlice(obj.Object, []interface{}{}, "status", "services"); err != nil {
+			return nil, err
+		}
+	}
+
+	if app.Status.AppliedResources == nil {
+		if err := unstructured.SetNestedSlice(obj.Object, []interface{}{}, "status", "appliedResources"); err != nil {
+			return nil, err
+		}
+	}
+
+	if wfStatus := app.Status.Workflow; wfStatus != nil && wfStatus.Steps == nil {
+		if err := unstructured.SetNestedSlice(obj.Object, []interface{}{}, "status", "workflow", "steps"); err != nil {
+			return nil, err
+		}
+	}
+
+	return obj, nil
 }

@@ -22,6 +22,7 @@ import (
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/ast"
 	"cuelang.org/go/cue/parser"
+	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/pkg/errors"
 )
 
@@ -33,13 +34,63 @@ const (
 
 	// StrategyRetainKeys notes on the strategic merge patch using the retainKeys strategy
 	StrategyRetainKeys = "retainKeys"
+	// StrategyReplace notes on the strategic merge patch will allow replacing list
+	StrategyReplace = "replace"
+	// StrategyJSONPatch notes on the strategic merge patch will follow the RFC 6902 to run JsonPatch
+	StrategyJSONPatch = "jsonPatch"
+	// StrategyJSONMergePatch notes on the strategic merge patch will follow the RFC 7396 to run JsonMergePatch
+	StrategyJSONMergePatch = "jsonMergePatch"
 )
 
 var (
 	notFoundErr = errors.Errorf("not found")
 )
 
-type interceptor func(node ast.Node) (ast.Node, error)
+// UnifyParams params for unify
+type UnifyParams struct {
+	PatchStrategy string
+}
+
+// UnifyOption defines the option for unify
+type UnifyOption interface {
+	ApplyToOption(params *UnifyParams)
+}
+
+// UnifyByJSONPatch unify by json patch following RFC 6902
+type UnifyByJSONPatch struct{}
+
+// ApplyToOption apply to option
+func (op UnifyByJSONPatch) ApplyToOption(params *UnifyParams) {
+	params.PatchStrategy = StrategyJSONPatch
+}
+
+// UnifyByJSONMergePatch unify by json patch following RFC 7396
+type UnifyByJSONMergePatch struct{}
+
+// ApplyToOption apply to option
+func (op UnifyByJSONMergePatch) ApplyToOption(params *UnifyParams) {
+	params.PatchStrategy = StrategyJSONMergePatch
+}
+
+func newUnifyParams(options ...UnifyOption) *UnifyParams {
+	params := &UnifyParams{}
+	for _, op := range options {
+		op.ApplyToOption(params)
+	}
+	return params
+}
+
+// CreateUnifyOptionsForPatcher create unify options for patcher
+func CreateUnifyOptionsForPatcher(patcher cue.Value) (options []UnifyOption) {
+	if IsJSONPatch(patcher) {
+		options = append(options, UnifyByJSONPatch{})
+	} else if IsJSONMergePatch(patcher) {
+		options = append(options, UnifyByJSONMergePatch{})
+	}
+	return
+}
+
+type interceptor func(baseNode ast.Node, patchNode ast.Node) error
 
 func listMergeProcess(field *ast.Field, key string, baseList, patchList *ast.ListLit) {
 	kmaps := map[string]ast.Expr{}
@@ -49,7 +100,7 @@ func listMergeProcess(field *ast.Field, key string, baseList, patchList *ast.Lis
 		if _, ok := elt.(*ast.Ellipsis); ok {
 			continue
 		}
-		nodev, err := lookUp(elt, key)
+		nodev, err := lookUp(elt, strings.Split(key, ".")...)
 		if err != nil {
 			return
 		}
@@ -67,7 +118,7 @@ func listMergeProcess(field *ast.Field, key string, baseList, patchList *ast.Lis
 			continue
 		}
 
-		nodev, err := lookUp(elt, key)
+		nodev, err := lookUp(elt, strings.Split(key, ".")...)
 		if err != nil {
 			return
 		}
@@ -101,8 +152,8 @@ func listMergeProcess(field *ast.Field, key string, baseList, patchList *ast.Lis
 	patchList.Elts = nElts
 }
 
-func strategyPatchHandle(baseNode ast.Node) interceptor {
-	return func(lnode ast.Node) (ast.Node, error) {
+func strategyPatchHandle() interceptor {
+	return func(baseNode ast.Node, patchNode ast.Node) error {
 		walker := newWalker(func(node ast.Node, ctx walkCtx) {
 			field, ok := node.(*ast.Field)
 			if !ok {
@@ -114,29 +165,33 @@ func strategyPatchHandle(baseNode ast.Node) interceptor {
 			switch val := value.(type) {
 			case *ast.ListLit:
 				key := ctx.Tags()[TagPatchKey]
-
+				patchStrategy := ""
 				tags := findCommentTag(field.Comments())
 				for tk, tv := range tags {
 					if tk == TagPatchKey {
 						key = tv
 					}
+					if tk == TagPatchStrategy {
+						patchStrategy = tv
+					}
 				}
 
-				if key == "" {
-					return
-				}
 				paths := append(ctx.Pos(), labelStr(field.Label))
-				baseNode, err := lookUp(baseNode, paths...)
+				baseSubNode, err := lookUp(baseNode, paths...)
 				if err != nil {
 					return
 				}
-				baselist, ok := baseNode.(*ast.ListLit)
+				baselist, ok := baseSubNode.(*ast.ListLit)
 				if !ok {
 					return
 				}
-				listMergeProcess(field, key, baselist, val)
+				if patchStrategy == StrategyReplace {
+					baselist.Elts = val.Elts
+				} else if key != "" {
+					listMergeProcess(field, key, baselist, val)
+				}
 
-			case *ast.StructLit:
+			default:
 				if !isStrategyRetainKeys(field) {
 					return
 				}
@@ -148,23 +203,22 @@ func strategyPatchHandle(baseNode ast.Node) interceptor {
 						for _, elt := range v.Elts {
 							if fe, ok := elt.(*ast.Field); ok &&
 								labelStr(fe.Label) == labelStr(field.Label) {
-								fe.Value = ast.NewStruct()
+								fe.Value = field.Value
 							}
 						}
-					case *ast.File:
+					case *ast.File: // For the top level element
 						for _, decl := range v.Decls {
 							if fe, ok := decl.(*ast.Field); ok &&
 								labelStr(fe.Label) == labelStr(field.Label) {
-								fe.Value = ast.NewStruct()
+								fe.Value = field.Value
 							}
 						}
 					}
 				}
 			}
-
 		})
-		walker.walk(lnode)
-		return lnode, nil
+		walker.walk(patchNode)
+		return nil
 	}
 }
 
@@ -178,8 +232,30 @@ func isStrategyRetainKeys(node *ast.Field) bool {
 	return false
 }
 
+// IsJSONMergePatch check if patcher is json merge patch
+func IsJSONMergePatch(patcher cue.Value) bool {
+	tags := findCommentTag(patcher.Doc())
+	return tags[TagPatchStrategy] == StrategyJSONMergePatch
+}
+
+// IsJSONPatch check if patcher is json patch
+func IsJSONPatch(patcher cue.Value) bool {
+	tags := findCommentTag(patcher.Doc())
+	return tags[TagPatchStrategy] == StrategyJSONPatch
+}
+
 // StrategyUnify unify the objects by the strategy
-func StrategyUnify(base, patch string) (string, error) {
+func StrategyUnify(base, patch string, options ...UnifyOption) (ret string, err error) {
+	params := newUnifyParams(options...)
+	var patchOpts []interceptor
+	if params.PatchStrategy == StrategyJSONMergePatch || params.PatchStrategy == StrategyJSONPatch {
+		base, err = OpenBaiscLit(base)
+		if err != nil {
+			return base, err
+		}
+	} else {
+		patchOpts = []interceptor{strategyPatchHandle()}
+	}
 	baseFile, err := parser.ParseFile("-", base, parser.ParseComments)
 	if err != nil {
 		return "", errors.WithMessage(err, "invalid base cue file")
@@ -189,12 +265,12 @@ func StrategyUnify(base, patch string) (string, error) {
 		return "", errors.WithMessage(err, "invalid patch cue file")
 	}
 
-	return strategyUnify(baseFile, patchFile, strategyPatchHandle(baseFile))
+	return strategyUnify(baseFile, patchFile, params, patchOpts...)
 }
 
-func strategyUnify(baseFile *ast.File, patchFile *ast.File, patchOpts ...interceptor) (string, error) {
+func strategyUnify(baseFile *ast.File, patchFile *ast.File, params *UnifyParams, patchOpts ...interceptor) (string, error) {
 	for _, option := range patchOpts {
-		if _, err := option(patchFile); err != nil {
+		if err := option(baseFile, patchFile); err != nil {
 			return "", errors.WithMessage(err, "process patchOption")
 		}
 	}
@@ -208,6 +284,12 @@ func strategyUnify(baseFile *ast.File, patchFile *ast.File, patchOpts ...interce
 	patchInst, err := r.CompileFile(patchFile)
 	if err != nil {
 		return "", errors.WithMessage(err, "compile patch file")
+	}
+
+	if params.PatchStrategy == StrategyJSONMergePatch {
+		return jsonMergePatch(baseInst.Value(), patchInst.Value())
+	} else if params.PatchStrategy == StrategyJSONPatch {
+		return jsonPatch(baseInst.Value(), patchInst.Lookup("operations"))
 	}
 
 	ret := baseInst.Value().Unify(patchInst.Value())
@@ -253,4 +335,41 @@ func findCommentTag(commentGroup []*ast.CommentGroup) map[string]string {
 		}
 	}
 	return kval
+}
+
+func jsonMergePatch(base cue.Value, patch cue.Value) (string, error) {
+	baseJSON, err := base.MarshalJSON()
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to marshal base value")
+	}
+	patchJSON, err := patch.MarshalJSON()
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to marshal patch value")
+	}
+	merged, err := jsonpatch.MergePatch(baseJSON, patchJSON)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to merge base value and patch value by JsonMergePatch")
+	}
+	return string(merged), nil
+}
+
+func jsonPatch(base cue.Value, patch cue.Value) (string, error) {
+	baseJSON, err := base.MarshalJSON()
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to marshal base value")
+	}
+	patchJSON, err := patch.MarshalJSON()
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to marshal patch value")
+	}
+	decodedPatch, err := jsonpatch.DecodePatch(patchJSON)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to decode patch")
+	}
+
+	merged, err := decodedPatch.Apply(baseJSON)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to apply json patch")
+	}
+	return string(merged), nil
 }

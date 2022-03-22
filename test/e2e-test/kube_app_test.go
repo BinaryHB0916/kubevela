@@ -22,16 +22,17 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ghodss/yaml"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/common"
 	"github.com/oam-dev/kubevela/apis/core.oam.dev/v1beta1"
+	"github.com/oam-dev/kubevela/apis/types"
 	"github.com/oam-dev/kubevela/pkg/oam/util"
 
 	. "github.com/onsi/ginkgo"
@@ -170,14 +171,14 @@ spec:
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name: compName,
 						Type: cdName,
 						Properties: util.Object2RawExtension(map[string]interface{}{
 							"image": "nginx:1.14.0",
 						}),
-						Traits: []v1beta1.ApplicationTrait{
+						Traits: []common.ApplicationTrait{
 							{
 								Type: "scaler",
 								Properties: util.Object2RawExtension(map[string]interface{}{
@@ -234,14 +235,14 @@ spec:
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name: compName,
 						Type: cdName,
 						Properties: util.Object2RawExtension(map[string]interface{}{
 							"image": "nginx:1.14.1", // nginx:1.14.0 => nginx:1.14.1
 						}),
-						Traits: []v1beta1.ApplicationTrait{
+						Traits: []common.ApplicationTrait{
 							{
 								Type: "scaler",
 								Properties: util.Object2RawExtension(map[string]interface{}{
@@ -315,7 +316,7 @@ spec:
 				Namespace: namespace,
 			},
 			Spec: v1beta1.ApplicationSpec{
-				Components: []v1beta1.ApplicationComponent{
+				Components: []common.ApplicationComponent{
 					{
 						Name: compName,
 						Type: cdName,
@@ -341,13 +342,13 @@ spec:
 
 	It("Test store JSON schema of Kube parameter in ConfigMap", func() {
 		By("Get the ConfigMap")
-		cmName := fmt.Sprintf("schema-%s", cdName)
+		cmName := fmt.Sprintf("component-schema-%s", cdName)
 		Eventually(func() error {
 			cm := &corev1.ConfigMap{}
 			if err := k8sClient.Get(ctx, client.ObjectKey{Name: cmName, Namespace: namespace}, cm); err != nil {
 				return err
 			}
-			if cm.Data["openapi-v3-json-schema"] == "" {
+			if cm.Data[types.OpenapiV3JSONSchema] == "" {
 				return errors.New("json schema is not found in the ConfigMap")
 			}
 			return nil

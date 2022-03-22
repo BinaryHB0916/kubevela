@@ -18,11 +18,14 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
-	"io/ioutil"
 	"net/http"
+	"time"
 
 	"cuelang.org/go/cue"
+	"github.com/pkg/errors"
 
 	"github.com/oam-dev/kubevela/pkg/builtin/registry"
 )
@@ -32,13 +35,10 @@ func init() {
 }
 
 // HTTPCmd provides methods for http task
-type HTTPCmd struct {
-	*http.Client
-}
+type HTTPCmd struct{}
 
-func newHTTPCmd(v cue.Value) (registry.Runner, error) {
-	client := http.DefaultClient
-	return &HTTPCmd{client}, nil
+func newHTTPCmd(_ cue.Value) (registry.Runner, error) {
+	return &HTTPCmd{}, nil
 }
 
 // Run exec the actual http logic, and res represent the result of http task
@@ -48,7 +48,13 @@ func (c *HTTPCmd) Run(meta *registry.Meta) (res interface{}, err error) {
 		method = meta.String("method")
 		u      = meta.String("url")
 	)
-	var r io.Reader
+	var (
+		r      io.Reader
+		client = &http.Client{
+			Transport: &http.Transport{},
+			Timeout:   time.Second * 3,
+		}
+	)
 	if obj := meta.Obj.Lookup("request"); obj.Exists() {
 		if v := obj.Lookup("body"); v.Exists() {
 			r, err = v.Reader()
@@ -64,6 +70,7 @@ func (c *HTTPCmd) Run(meta *registry.Meta) (res interface{}, err error) {
 		}
 	}
 	if header == nil {
+		header = map[string][]string{}
 		header.Set("Content-Type", "application/json")
 	}
 	if meta.Err != nil {
@@ -77,13 +84,48 @@ func (c *HTTPCmd) Run(meta *registry.Meta) (res interface{}, err error) {
 	req.Header = header
 	req.Trailer = trailer
 
-	resp, err := c.Client.Do(req)
+	if tlsConfig := meta.Obj.Lookup("tls_config"); tlsConfig.Exists() {
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{
+				NextProtos: []string{"http/1.1"},
+			},
+		}
+		ca := tlsConfig.Lookup("ca")
+		if caCrt, err := ca.String(); err != nil {
+			return nil, errors.WithMessage(err, "parse ca")
+		} else {
+			pool := x509.NewCertPool()
+			pool.AppendCertsFromPEM([]byte(caCrt))
+			tr.TLSClientConfig.RootCAs = pool
+		}
+
+		cert := tlsConfig.Lookup("client_crt")
+		key := tlsConfig.Lookup("client_key")
+		if cert.Exists() && key.Exists() {
+			crtData, err := cert.String()
+			if err != nil {
+				return nil, err
+			}
+			keyData, err := key.String()
+			if err != nil {
+				return nil, err
+			}
+			cliCrt, err := tls.X509KeyPair([]byte(crtData), []byte(keyData))
+			if err != nil {
+				return nil, errors.WithMessage(err, "parse client keypair")
+			}
+			tr.TLSClientConfig.Certificates = []tls.Certificate{cliCrt}
+		}
+
+		client.Transport = tr
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	//nolint:errcheck
 	defer resp.Body.Close()
-	b, err := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
 	// parse response body and headers
 	return map[string]interface{}{
 		"body":    string(b),

@@ -17,17 +17,12 @@ limitations under the License.
 package e2e
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"net/http"
-	"strings"
+	"os"
 
+	"github.com/Netflix/go-expect"
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
-
-	"github.com/oam-dev/kubevela/references/apiserver/apis"
-	"github.com/oam-dev/kubevela/references/apiserver/util"
 )
 
 var (
@@ -37,9 +32,29 @@ var (
 		return ginkgo.Context(context, func() {
 			ginkgo.It("should print environment initiation successful message", func() {
 				cli := fmt.Sprintf("vela env init %s", envName)
-				output, err := Exec(cli)
+				var answer = "default"
+				if envName != "env-application" {
+					answer = "vela-system"
+				}
+				output, err := InteractiveExec(cli, func(c *expect.Console) {
+					data := []struct {
+						q, a string
+					}{
+						{
+							q: "Would you like to choose an existing namespaces as your env?",
+							a: answer,
+						},
+					}
+					for _, qa := range data {
+						_, err := c.ExpectString(qa.q)
+						gomega.Expect(err).NotTo(gomega.HaveOccurred())
+						_, err = c.SendLine(qa.a)
+						gomega.Expect(err).NotTo(gomega.HaveOccurred())
+					}
+					c.ExpectEOF()
+				})
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				expectedOutput := fmt.Sprintf("environment %s created,", envName)
+				expectedOutput := fmt.Sprintf("environment %s with namespace %s created", envName, answer)
 				gomega.Expect(output).To(gomega.ContainSubstring(expectedOutput))
 			})
 		})
@@ -51,7 +66,7 @@ var (
 				cli := fmt.Sprintf("vela env init %s --namespace %s", envName, namespace)
 				output, err := Exec(cli)
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				expectedOutput := fmt.Sprintf("environment %s created,", envName)
+				expectedOutput := fmt.Sprintf("environment %s with namespace %s created", envName, namespace)
 				gomega.Expect(output).To(gomega.ContainSubstring(expectedOutput))
 			})
 		})
@@ -60,7 +75,7 @@ var (
 	JsonAppFileContext = func(context, jsonAppFile string) bool {
 		return ginkgo.Context(context, func() {
 			ginkgo.It("Start the application through the app file in JSON format.", func() {
-				writeStatus := ioutil.WriteFile("vela.json", []byte(jsonAppFile), 0644)
+				writeStatus := os.WriteFile("vela.json", []byte(jsonAppFile), 0644)
 				gomega.Expect(writeStatus).NotTo(gomega.HaveOccurred())
 				output, err := Exec("vela up -f vela.json")
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -98,8 +113,7 @@ var (
 				cli := fmt.Sprintf("vela env sw %s", envName)
 				output, err := Exec(cli)
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				expectedOutput := fmt.Sprintf("Set environment succeed, current environment is %s", envName)
-				gomega.Expect(output).To(gomega.ContainSubstring(expectedOutput))
+				gomega.Expect(output).To(gomega.ContainSubstring(envName))
 			})
 		})
 	}
@@ -115,17 +129,6 @@ var (
 			})
 		})
 	}
-	EnvDeleteCurrentUsingContext = func(context string, envName string) bool {
-		return ginkgo.Context(context, func() {
-			ginkgo.It("should delete all envs", func() {
-				cli := fmt.Sprintf("vela env delete %s", envName)
-				output, err := Exec(cli)
-				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				expectedOutput := fmt.Sprintf("Error: you can't delete current using environment %s", envName)
-				gomega.Expect(output).To(gomega.ContainSubstring(expectedOutput))
-			})
-		})
-	}
 
 	WorkloadDeleteContext = func(context string, applicationName string) bool {
 		return ginkgo.Context(context, func() {
@@ -133,7 +136,7 @@ var (
 				cli := fmt.Sprintf("vela delete %s", applicationName)
 				output, err := Exec(cli)
 				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				gomega.Expect(output).To(gomega.ContainSubstring("deleted from env"))
+				gomega.Expect(output).To(gomega.ContainSubstring("deleted from namespace"))
 			})
 		})
 	}
@@ -170,26 +173,6 @@ var (
 				if traitAlias != "" {
 					gomega.Expect(output).To(gomega.ContainSubstring(traitAlias))
 				}
-			})
-		})
-	}
-
-	// APIEnvInitContext used for test api env
-	APIEnvInitContext = func(context string, envMeta apis.Environment) bool {
-		return ginkgo.Context("Post /envs/", func() {
-			ginkgo.It("should create an env", func() {
-				data, err := json.Marshal(&envMeta)
-				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				resp, err := http.Post(util.URL("/envs/"), "application/json", strings.NewReader(string(data)))
-				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				defer resp.Body.Close()
-				result, err := ioutil.ReadAll(resp.Body)
-				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				var r apis.Response
-				err = json.Unmarshal(result, &r)
-				gomega.Expect(err).NotTo(gomega.HaveOccurred())
-				gomega.Expect(r.Code).Should(gomega.Equal(http.StatusOK))
-				gomega.Expect(r.Data.(string)).To(gomega.ContainSubstring("created"))
 			})
 		})
 	}

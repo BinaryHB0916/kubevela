@@ -13,7 +13,7 @@ on:
 
 env:
   # Common versions
-  GO_VERSION: '1.16'
+  GO_VERSION: '1.17'
   GOLANGCI_VERSION: 'v1.38'
   KIND_VERSION: 'v0.7.0'
 
@@ -67,8 +67,12 @@ jobs:
           version: ${{ env.KIND_VERSION }}
 
       - name: install Kubebuilder
-        uses: wonderflow/kubebuilder-action@v1.1
-
+        uses: RyanSiu1995/kubebuilder-action@v1.2
+        with:
+          version: 3.1.0
+          kubebuilderOnly: false
+          kubernetesVersion: v1.21.2
+      
       - name: Run Make test
         run: make test
 
@@ -77,5 +81,5 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage.txt
-          flags: unittests
+          flags: core-unittests
           name: codecov-umbrella

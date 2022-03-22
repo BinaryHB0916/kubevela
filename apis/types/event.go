@@ -18,13 +18,14 @@ package types
 
 // reason for Application
 const (
-	ReasonParsed      = "Parsed"
-	ReasonRendered    = "Rendered"
-	ReasonRevisoned   = "Revisioned"
-	ReasonApplied     = "Applied"
-	ReasonHealthCheck = "HealthChecked"
-	ReasonDeployed    = "Deployed"
-	ReasonRollout     = "Rollout"
+	ReasonParsed          = "Parsed"
+	ReasonRendered        = "Rendered"
+	ReasonPolicyGenerated = "PolicyGenerated"
+	ReasonRevisoned       = "Revisioned"
+	ReasonApplied         = "Applied"
+	ReasonHealthCheck     = "HealthChecked"
+	ReasonDeployed        = "Deployed"
+	ReasonRollout         = "Rollout"
 
 	ReasonFailedParse       = "FailedParse"
 	ReasonFailedRender      = "FailedRender"
@@ -32,19 +33,22 @@ const (
 	ReasonFailedWorkflow    = "FailedWorkflow"
 	ReasonFailedApply       = "FailedApply"
 	ReasonFailedHealthCheck = "FailedHealthCheck"
+	ReasonFailedStateKeep   = "FailedStateKeep"
 	ReasonFailedGC          = "FailedGC"
 	ReasonFailedRollout     = "FailedRollout"
 )
 
 // event message for Application
 const (
-	MessageParsed      = "Parsed successfully"
-	MessageRendered    = "Rendered successfully"
-	MessageRevisioned  = "Revisioned successfully"
-	MessageApplied     = "Applied successfully"
-	MessageHealthCheck = "Health checked healthy"
-	MessageDeployed    = "Deployed successfully"
-	MessageRollout     = "Rollout successfully"
+	MessageParsed           = "Parsed successfully"
+	MessageRendered         = "Rendered successfully"
+	MessagePolicyGenerated  = "Policy generated successfully"
+	MessageRevisioned       = "Revisioned successfully"
+	MessageApplied          = "Applied successfully"
+	MessageWorkflowFinished = "Workflow finished"
+	MessageHealthCheck      = "Health checked healthy"
+	MessageDeployed         = "Deployed successfully"
+	MessageRollout          = "Rollout successfully"
 
 	MessageFailedParse       = "fail to parse application, err: %v"
 	MessageFailedRender      = "fail to render application, err: %v"

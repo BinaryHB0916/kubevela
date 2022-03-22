@@ -23,7 +23,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/crossplane/crossplane-runtime/apis/core/v1alpha1"
 	"github.com/crossplane/crossplane-runtime/pkg/fieldpath"
 	"github.com/crossplane/crossplane-runtime/pkg/test"
 	"github.com/google/go-cmp/cmp"
@@ -31,6 +30,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -200,7 +200,7 @@ func TestRender(t *testing.T) {
 		"GetTraitDefinitionError": {
 			reason: "Errors getting a traitDefinition should be reflected as a status condition",
 			fields: fields{
-				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 					switch robj := obj.(type) {
 					case *v1alpha2.Component:
 						ccomp := v1alpha2.Component{Status: v1alpha2.ComponentStatus{LatestRevision: &common.Revision{Name: revisionName2}}}
@@ -295,7 +295,7 @@ func TestRender(t *testing.T) {
 		"Success-With-RevisionName": {
 			reason: "Workload should successfully be rendered with fixed componentRevision",
 			fields: fields{
-				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 					robj, ok := obj.(*v1.ControllerRevision)
 					if ok {
 						rev := &v1.ControllerRevision{
@@ -377,7 +377,7 @@ func TestRender(t *testing.T) {
 		"Success-With-RevisionEnabledTrait": {
 			reason: "Workload name should successfully be rendered with revisionName",
 			fields: fields{
-				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 					switch robj := obj.(type) {
 					case *v1alpha2.Component:
 						ccomp := v1alpha2.Component{Status: v1alpha2.ComponentStatus{LatestRevision: &common.Revision{Name: revisionName2}}}
@@ -452,7 +452,7 @@ func TestRender(t *testing.T) {
 		"Success-With-WorkloadRef": {
 			reason: "Workload should successfully be rendered with fixed componentRevision",
 			fields: fields{
-				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 					robj, ok := obj.(*v1.ControllerRevision)
 					if ok {
 						rev := &v1.ControllerRevision{
@@ -535,7 +535,7 @@ func TestRender(t *testing.T) {
 									oam.LabelAppComponentRevision: revisionName,
 									oam.LabelOAMResourceType:      oam.ResourceTypeTrait,
 								})
-								workloadRef := v1alpha1.TypedReference{
+								workloadRef := corev1.ObjectReference{
 									APIVersion: "traitApiVersion",
 									Kind:       "traitKind",
 									Name:       componentName,
@@ -555,7 +555,7 @@ func TestRender(t *testing.T) {
 		"Success-With-AppControlledAppConfig-CloneSet": {
 			reason: "Workload name should be component name for CloneSet",
 			fields: fields{
-				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 					switch defObj := obj.(type) {
 					case *v1alpha2.Component:
 						ccomp := v1alpha2.Component{
@@ -633,7 +633,7 @@ func TestRender(t *testing.T) {
 		"Success-With-AppControlledAppConfig-Deployment": {
 			reason: "Workload name should be component revision for Deployment",
 			fields: fields{
-				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 					switch defObj := obj.(type) {
 					case *v1alpha2.Component:
 						ccomp := v1alpha2.Component{
@@ -711,7 +711,7 @@ func TestRender(t *testing.T) {
 		"Success-With-Template-Finished-Deployment": {
 			reason: "We do not render the workload after the template is done",
 			fields: fields{
-				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 					switch defObj := obj.(type) {
 					case *v1alpha2.Component:
 						ccomp := v1alpha2.Component{
@@ -790,7 +790,7 @@ func TestRender(t *testing.T) {
 		"Success-With-Force-Template-Deployment": {
 			reason: "We force render the workload as long as the status is not templated",
 			fields: fields{
-				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+				client: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 					switch defObj := obj.(type) {
 					case *v1alpha2.Component:
 						ccomp := v1alpha2.Component{
@@ -997,7 +997,7 @@ func TestRenderComponent(t *testing.T) {
 		}},
 	}
 
-	mockGet := test.NewMockGetFn(nil, func(obj runtime.Object) error {
+	mockGet := test.NewMockGetFn(nil, func(obj client.Object) error {
 		switch defObj := obj.(type) {
 		case *v1alpha2.TraitDefinition:
 			ttrait := v1alpha2.TraitDefinition{ObjectMeta: metav1.ObjectMeta{Name: traitName},
@@ -1736,13 +1736,6 @@ func TestIsControlledByApp(t *testing.T) {
 	// only true when it's the controller
 	ac.OwnerReferences[1].Controller = pointer.BoolPtr(true)
 	assert.True(t, isControlledByApp(ac))
-	// still true when it's not the only the controller
-	ac.OwnerReferences = append(ac.OwnerReferences, metav1.OwnerReference{
-		APIVersion: v1beta1.SchemeGroupVersion.String(),
-		Kind:       v1beta1.AppRolloutKind,
-		Controller: pointer.BoolPtr(true),
-	})
-	assert.True(t, isControlledByApp(ac))
 }
 
 func TestSetTraitProperties(t *testing.T) {
@@ -1829,7 +1822,7 @@ func TestRenderTraitName(t *testing.T) {
 					ComponentName: componentName,
 					Traits: []v1alpha2.WorkloadTrait{
 						{
-							Reference: v1alpha1.TypedReference{
+							Reference: corev1.ObjectReference{
 								APIVersion: gvk.GroupVersion().String(),
 								Kind:       gvk.Kind,
 								Name:       "component3-trait-11111111",
@@ -1900,7 +1893,7 @@ func TestRenderTraitNameWithoutReferenceName(t *testing.T) {
 					ComponentName: componentName,
 					Traits: []v1alpha2.WorkloadTrait{
 						{
-							Reference: v1alpha1.TypedReference{
+							Reference: corev1.ObjectReference{
 								APIVersion: gvk.GroupVersion().String(),
 								Kind:       gvk.Kind,
 							},
@@ -1983,7 +1976,7 @@ func TestRenderTraitNameWithShortNameTraitDefinition(t *testing.T) {
 					ComponentName: componentName,
 					Traits: []v1alpha2.WorkloadTrait{
 						{
-							Reference: v1alpha1.TypedReference{
+							Reference: corev1.ObjectReference{
 								APIVersion: gvk.GroupVersion().String(),
 								Kind:       gvk.Kind,
 							},
@@ -2326,7 +2319,7 @@ func TestDiscoverHelmModuleWorkload(t *testing.T) {
 				Release: runtime.RawExtension{Raw: releaseRaw},
 			},
 			workloadInComp: &unstructured.Unstructured{},
-			c: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+			c: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 				o, _ := obj.(*unstructured.Unstructured)
 				*o = unstructured.Unstructured{}
 				o.SetLabels(map[string]string{
@@ -2338,7 +2331,7 @@ func TestDiscoverHelmModuleWorkload(t *testing.T) {
 		},
 		"DiscoverSuccessfully": {
 			reason: "No error should occur and the workload shoud be returned",
-			c: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj runtime.Object) error {
+			c: &test.MockClient{MockGet: test.NewMockGetFn(nil, func(obj client.Object) error {
 				o, _ := obj.(*unstructured.Unstructured)
 				*o = *wl.DeepCopy()
 				return nil
